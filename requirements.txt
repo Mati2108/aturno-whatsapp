@@ -1,0 +1,30 @@
+# LLM y orquestación
+langchain
+langchain-core
+langgraph
+langchain-openai
+langchain-anthropic
+langchain-ollama
+langchain-google-genai
+
+# RAG
+langchain-chroma
+chromadb
+
+# API y canal
+fastapi
+uvicorn[standard]
+httpx
+twilio
+
+# Validación y config
+pydantic
+pydantic-settings
+python-dotenv
+
+# Observabilidad
+arize-phoenix
+openinference-instrumentation-langchain
+langgraph
+langgraph-checkpoint-postgres
+psycopg[binary,pool]
