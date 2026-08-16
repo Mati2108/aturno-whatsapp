@@ -1,0 +1,50 @@
+# Blueprint de Render. En el panel: New → Blueprint → conectar este repo.
+# Crea el servicio y la base juntos; los secretos se cargan a mano una vez.
+services:
+  - type: web
+    name: aturno-whatsapp
+    runtime: docker
+    plan: free
+    healthCheckPath: /salud
+    envVars:
+      # La base se crea abajo; Render inyecta su URL sola.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aturno-whatsapp-db
+          property: connectionString
+
+      # Embeddings por API: el modelo local pide 805 MB y el plan free tiene
+      # 512. Ver el comentario en src/rag/indice.py.
+      - key: EMBEDDINGS_MODO
+        value: api
+
+      - key: PROVIDER
+        value: anthropic
+
+      # Sin colector en producción todavía. El bot funciona igual: el trazado
+      # falla blando a propósito.
+      - key: PHOENIX_HABILITADO
+        value: "false"
+
+      # Se cargan a mano en el panel. sync:false = Render no las pisa en cada
+      # deploy y no quedan escritas en el repo.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_WHATSAPP_NUMBER
+        sync: false
+      # La URL pública que Render asigne. Necesaria para validar la firma de
+      # Twilio: la firma se calcula sobre la URL exacta que Twilio llamó.
+      - key: PUBLIC_URL
+        sync: false
+
+databases:
+  - name: aturno-whatsapp-db
+    plan: free
+    databaseName: aturno_whatsapp
+    user: aturno

@@ -28,3 +28,4 @@ openinference-instrumentation-langchain
 langgraph
 langgraph-checkpoint-postgres
 psycopg[binary,pool]
+fastembed

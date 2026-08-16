@@ -28,7 +28,7 @@ from pathlib import Path
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from langchain_ollama import OllamaEmbeddings
+from langchain_core.embeddings import Embeddings
 from langchain_text_splitters import MarkdownHeaderTextSplitter
 
 logger = logging.getLogger("pipeline.rag")
@@ -37,21 +37,98 @@ RAIZ = Path(__file__).resolve().parent.parent.parent
 CARPETA_DATOS = RAIZ / "datos"
 CARPETA_INDICE = RAIZ / "chroma"
 
-# Embeddings locales: gratis, ilimitados y los datos del negocio no salen de
-# la máquina — el mismo argumento de venta del plan self-hosted.
+# Embeddings locales, en proceso: gratis, ilimitados y los datos del negocio
+# no salen del servidor — el mismo argumento de venta del plan self-hosted.
 #
-# Por qué bge-m3 y no nomic-embed-text: lo medimos sobre 8 preguntas reales en
-# español (ver test_recuperacion.py). nomic acertaba 4/8 en top-1 y fallaba en
-# "cuánto cuesta un corte", que es LA pregunta más común de un negocio de
-# turnos. bge-m3 acierta 7/8. La diferencia es el idioma: nomic está entrenado
-# sobre todo en inglés, y agregarle los prefijos de tarea que pide su
-# documentación no cambió nada. El producto habla español; el modelo también
-# tiene que hacerlo.
-MODELO_EMBEDDINGS = "bge-m3"
+# Se eligió midiendo, no por gusto (ver test_recuperacion.py, 8 preguntas
+# reales en español):
+#
+#   nomic-embed-text   4/8 top-1  — fallaba en "cuánto cuesta un corte", que
+#                                   es LA pregunta más común. Entrenado sobre
+#                                   todo en inglés; los prefijos de tarea que
+#                                   pide su doc no cambiaron nada.
+#   bge-m3             8/8 top-1  — pero corre sobre Ollama, un demonio de
+#                                   1,2 GB. Inviable en un contenedor chico.
+#   MiniLM multilingüe 8/8 top-1  — misma puntuación, 0,22 GB, y corre EN
+#                                   PROCESO. Sin demonio que desplegar.
+#
+#   Gemini API         8/8 top-1  — misma puntuación otra vez, y CERO memoria
+#                                   en el proceso.
+#
+# Y ahí apareció el dato que decidió el default. Medido en este proyecto:
+#
+#     proceso con el modelo local cargado ...... 962 MB
+#     proceso usando embeddings por API ........ 173 MB
+#
+# Los 805 MB de diferencia son el runtime de ONNX; limitarle hilos y arenas no
+# los baja. Un plan chico de hosting tiene 512 MB, así que el modelo local
+# directamente no entra — y pagar el doble de RAM cuesta más que el resto del
+# sistema junto.
+#
+# Por eso el default es la API y lo local queda como opción: es el mismo
+# patrón que el LLM. Un consultorio que no quiere que los datos salgan de su
+# servidor cambia EMBEDDINGS_MODO=local y paga esa memoria a propósito.
+#
+# Ocho preguntas no prueban equivalencia; alcanzan para elegir entre opciones
+# que puntúan igual.
+MODELO_LOCAL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+MODELO_API = "models/gemini-embedding-001"
 
 
-def _embeddings() -> OllamaEmbeddings:
-    return OllamaEmbeddings(model=MODELO_EMBEDDINGS)
+class EmbeddingsLocales(Embeddings):
+    """Adaptador mínimo sobre fastembed (ONNX), sin servicios externos.
+
+    No usamos el wrapper de langchain-community porque ese paquete está en
+    proceso de discontinuación. Son quince líneas: no vale la pena arrastrar
+    una dependencia sin mantenimiento por ellas.
+
+    El modelo se carga una sola vez, la primera vez que se usa: cargarlo por
+    consulta agregaría segundos a cada mensaje.
+    """
+
+    def __init__(self, modelo: str = MODELO_LOCAL) -> None:
+        from fastembed import TextEmbedding
+
+        self._modelo = TextEmbedding(model_name=modelo)
+
+    def embed_documents(self, textos: list[str]) -> list[list[float]]:
+        return [v.tolist() for v in self._modelo.embed(textos)]
+
+    def embed_query(self, texto: str) -> list[float]:
+        return next(iter(self._modelo.embed([texto]))).tolist()
+
+
+_cache: Embeddings | None = None
+
+
+def _embeddings() -> Embeddings:
+    """El proveedor configurado. Una sola instancia por proceso.
+
+    EMBEDDINGS_MODO=api    (default) Gemini. Sin modelo en memoria.
+    EMBEDDINGS_MODO=local            fastembed en proceso, +805 MB, sin red.
+    """
+    global _cache
+    if _cache is not None:
+        return _cache
+
+    from src.config import config
+    cfg = config()
+
+    if cfg.embeddings_modo == "local":
+        _cache = EmbeddingsLocales()
+    else:
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+        _cache = GoogleGenerativeAIEmbeddings(
+            model=MODELO_API, google_api_key=cfg.gemini_api_key
+        )
+    return _cache
+
+
+def modelo_en_uso() -> str:
+    from src.config import config
+
+    return MODELO_LOCAL if config().embeddings_modo == "local" else MODELO_API
 
 
 def _fragmentar(texto: str, business_id: str) -> list[Document]:

@@ -22,7 +22,8 @@ que contestar aunque el trazado esté caído.
 from __future__ import annotations
 
 import logging
-import os
+
+from src.config import config
 
 logger = logging.getLogger("pipeline.observabilidad")
 
@@ -40,16 +41,22 @@ def configurar_trazas(nombre_proyecto: str = "aturno-whatsapp") -> bool:
         PHOENIX_HABILITADO=true         prende el trazado
         PHOENIX_ENDPOINT=http://...     dónde está el colector
 
+    Se leen a través de `config()` y no de os.getenv: pydantic-settings carga
+    el .env sin poblar el entorno del proceso, así que un os.getenv acá
+    devolvía siempre el default y el trazado quedaba apagado con la variable
+    puesta en true. Un solo lugar lee configuración, y es config.py.
+
     Apagado por defecto: los tests no deberían necesitar una dependencia
     externa corriendo para pasar.
     """
     global _activo
+    cfg = config()
 
-    if os.getenv("PHOENIX_HABILITADO", "false").lower() not in ("1", "true", "si", "sí"):
+    if not cfg.phoenix_habilitado:
         logger.info("Trazado apagado (PHOENIX_HABILITADO no está en true)")
         return False
 
-    endpoint = os.getenv("PHOENIX_ENDPOINT", "http://localhost:6006/v1/traces")
+    endpoint = cfg.phoenix_endpoint
 
     try:
         from openinference.instrumentation.langchain import LangChainInstrumentor

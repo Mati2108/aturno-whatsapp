@@ -59,6 +59,14 @@ class Config(BaseSettings):
     # firma cualquiera puede postear turnos falsos.
     validar_firma: bool = True
 
+    # ---- Embeddings ----
+    # "api" (Gemini, sin memoria) | "local" (fastembed, +805 MB, sin red)
+    embeddings_modo: str = "api"
+
+    # ---- Observabilidad ----
+    phoenix_habilitado: bool = False
+    phoenix_endpoint: str = "http://localhost:6006/v1/traces"
+
     # ---- Backend de aturno ----
     aturno_modo: str = "doble"  # "doble" (en memoria) | "api" (backend real)
     aturno_api_url: str = "http://localhost:3001"

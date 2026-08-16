@@ -1,0 +1,41 @@
+# Levanta el sistema entero con un comando:  docker compose up
+#
+# Tres servicios: la base donde vive el checkpointer, el bot, y Phoenix para
+# ver las trazas. Phoenix es opcional — si no lo querés: docker compose up bot
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aturno
+      POSTGRES_PASSWORD: aturno
+      POSTGRES_DB: aturno_whatsapp
+    volumes:
+      - datos_db:/var/lib/postgresql/data
+    healthcheck:
+      # El bot crea las tablas del checkpointer al arrancar; si sale antes de
+      # que Postgres acepte conexiones, se cae en el primer mensaje.
+      test: ["CMD-SHELL", "pg_isready -U aturno -d aturno_whatsapp"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  bot:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      # Dentro de compose la base se llama "db", no localhost.
+      DATABASE_URL: postgresql://aturno:aturno@db:5432/aturno_whatsapp
+      PHOENIX_ENDPOINT: http://phoenix:6006/v1/traces
+    depends_on:
+      db:
+        condition: service_healthy
+
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006"
+
+volumes:
+  datos_db:

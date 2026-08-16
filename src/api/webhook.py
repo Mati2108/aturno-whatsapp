@@ -35,7 +35,7 @@ from src.aturno.doble import AturnoDoble
 from src.config import TENANTS, config, tenant_por_numero
 from src.fechas import calendario
 from src.observabilidad import configurar_trazas, trazado_activo
-from src.rag.indice import MODELO_EMBEDDINGS
+from src.rag.indice import modelo_en_uso
 from src.schemas import MensajeEntrante, Tenant
 
 logger = logging.getLogger("pipeline.webhook")
@@ -93,7 +93,7 @@ async def _al_arrancar() -> None:
     logger.info(
         "aturno-whatsapp listo · LLM=%s · aturno=%s · firma=%s · negocios=%d · RAG=%s · trazas=%s",
         cfg.provider, cfg.aturno_modo, cfg.validar_firma, len(TENANTS),
-        MODELO_EMBEDDINGS, "on" if trazado_activo() else "off",
+        modelo_en_uso().split('/')[-1], "on" if trazado_activo() else "off",
     )
 
 
