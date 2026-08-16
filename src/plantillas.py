@@ -277,8 +277,28 @@ def no_entendi(reintento: str) -> str:
 
 
 def respuesta_info(texto: str) -> str:
-    """Envuelve lo que devolvió el RAG. El LLM no reescribe: se muestra tal cual."""
-    return texto.strip()
+    """Limpia lo que devolvió el RAG para que se lea bien en WhatsApp.
+
+    Los fragmentos vienen de archivos markdown y traían los "##" y los "-" del
+    original. WhatsApp no renderiza markdown: la persona veía literalmente
+    "## Horarios de atención". Se quitan los marcadores y se deja el texto.
+
+    El LLM no reescribe esto: el dato del negocio sale tal cual está cargado,
+    sin que un modelo pueda alterarlo de paso.
+    """
+    lineas = []
+    for cruda in texto.strip().splitlines():
+        linea = cruda.strip()
+        if not linea or linea.startswith("---"):
+            continue
+        if linea.startswith("#"):
+            # Un encabezado de sección pasa a ser un título simple
+            lineas.append(linea.lstrip("# ").strip())
+        elif linea.startswith(("- ", "* ")):
+            lineas.append("· " + linea[2:].strip())
+        else:
+            lineas.append(linea)
+    return "\n".join(lineas)
 
 
 def cancelado() -> str:

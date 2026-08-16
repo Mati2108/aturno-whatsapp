@@ -34,6 +34,7 @@ from src.agentes.flujo import construir_flujo, hilo_de
 from src.aturno.doble import AturnoDoble
 from src.config import TENANTS, config, tenant_por_numero
 from src.fechas import calendario
+from src.observabilidad import configurar_trazas, trazado_activo
 from src.rag.indice import MODELO_EMBEDDINGS
 from src.schemas import MensajeEntrante, Tenant
 
@@ -78,6 +79,10 @@ async def _al_arrancar() -> None:
     _configurar_logs()
     cfg = config()
 
+    # Antes de armar el grafo: la instrumentación tiene que estar puesta
+    # cuando se construyan los runnables, si no los spans salen sueltos.
+    configurar_trazas()
+
     flujo.configurar(aturno)
 
     _saver_ctx = AsyncPostgresSaver.from_conn_string(cfg.database_url)
@@ -86,8 +91,9 @@ async def _al_arrancar() -> None:
     _grafo = construir_flujo(saver)
 
     logger.info(
-        "aturno-whatsapp listo · LLM=%s · aturno=%s · firma=%s · negocios=%d · RAG=%s",
-        cfg.provider, cfg.aturno_modo, cfg.validar_firma, len(TENANTS), MODELO_EMBEDDINGS,
+        "aturno-whatsapp listo · LLM=%s · aturno=%s · firma=%s · negocios=%d · RAG=%s · trazas=%s",
+        cfg.provider, cfg.aturno_modo, cfg.validar_firma, len(TENANTS),
+        MODELO_EMBEDDINGS, "on" if trazado_activo() else "off",
     )
 
 
@@ -112,6 +118,7 @@ async def salud() -> dict:
         "proveedor_llm": cfg.provider,
         "aturno_modo": cfg.aturno_modo,
         "firma_validada": cfg.validar_firma,
+        "trazado": trazado_activo(),
     }
 
 
