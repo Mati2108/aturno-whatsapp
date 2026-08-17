@@ -217,6 +217,64 @@ async def diagnostico() -> dict[str, EstadoCredencial]:
     return await _verificar_credenciales()
 
 
+class Ajuste(BaseModel):
+    """Si una variable está puesta y qué efecto tiene. Nunca su valor."""
+
+    puesta: bool
+    efecto: str = Field(description="Qué cambia según esté o no.")
+
+
+@app.get("/configuracion", response_model=dict[str, Ajuste])
+async def configuracion() -> dict[str, Ajuste]:
+    """Qué variables de entorno LLEGARON al servicio.
+
+    Existe porque diagnosticar esto desde afuera es adivinar. Un servicio con
+    una variable sin cargar se comporta distinto sin dar ninguna señal, y la
+    única forma de saberlo era deducirlo del comportamiento — que fue
+    exactamente lo que pasó tres veces seguidas con las mismas cuatro.
+
+    Solo dice SI está puesta, nunca el valor. Un booleano no sirve para
+    entrar a ningún lado.
+    """
+    cfg = config()
+    return {
+        "ATURNO_MODO": Ajuste(
+            puesta=cfg.aturno_modo == "api",
+            efecto=("los turnos van a la agenda real de aturno"
+                    if cfg.aturno_modo == "api"
+                    else "SIN ESTO: el bot reserva en memoria y el turno no "
+                         "llega a ninguna agenda"),
+        ),
+        "ATURNO_API_URL": Ajuste(
+            puesta=cfg.aturno_api_url.startswith("https://"),
+            efecto=("apunta a un backend real"
+                    if cfg.aturno_api_url.startswith("https://")
+                    else f"SIN ESTO: apunta a «{cfg.aturno_api_url}», que desde "
+                         "el servidor no existe"),
+        ),
+        "PANEL_URL": Ajuste(
+            puesta=bool(cfg.panel_url),
+            efecto=("el panel recibe cada mensaje" if cfg.panel_url
+                    else "SIN ESTO: las conversaciones no aparecen en el panel"),
+        ),
+        "PANEL_SECRETO": Ajuste(
+            puesta=bool(cfg.panel_secreto),
+            efecto=("el panel puede contestar" if cfg.panel_secreto
+                    else "SIN ESTO: el panel no puede tomar el control"),
+        ),
+        "ATURNO_WEB_URL": Ajuste(
+            puesta=bool(cfg.aturno_web_url),
+            efecto=("puede mandar el link a la página" if cfg.aturno_web_url
+                    else "sin esto no ofrece el link, y está bien: uno roto es peor"),
+        ),
+        "PUBLIC_URL": Ajuste(
+            puesta=bool(cfg.public_url),
+            efecto=("valida la firma de Twilio" if cfg.public_url
+                    else "SIN ESTO: la firma no se puede validar"),
+        ),
+    }
+
+
 class Cupo(BaseModel):
     """Cuántos mensajes quedan antes de que Twilio empiece a rechazar."""
 
