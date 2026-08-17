@@ -34,6 +34,7 @@ from src.schemas import (
     MotivoNoDisponible,
     Profesional,
     Servicio,
+    SinLugar,
     TurnoConfirmado,
 )
 
@@ -157,13 +158,20 @@ class AturnoDoble(ClienteAturno):
         resultado: list[DiaConCupo] = []
         for i in range(dias):
             d = desde + timedelta(days=i)
-            abierto = HORARIOS.get(d.weekday()) is not None
+            abre = HORARIOS.get(d.weekday()) is not None
             disp = await self.consultar_disponibilidad(
                 business_id, servicio_id, d, profesional_id
             )
-            resultado.append(
-                DiaConCupo(fecha=d, libres=len(disp.horarios), abierto=abierto)
-            )
+            libres = len(disp.horarios)
+            if libres:
+                motivo = None
+            elif not abre:
+                motivo = SinLugar.CERRADO
+            elif not self._grilla(30, d):
+                motivo = SinLugar.YA_PASO
+            else:
+                motivo = SinLugar.COMPLETO
+            resultado.append(DiaConCupo(fecha=d, libres=libres, motivo=motivo))
         return resultado
 
     async def consultar_pedido(

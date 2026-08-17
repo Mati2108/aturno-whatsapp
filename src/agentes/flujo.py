@@ -363,17 +363,9 @@ async def _abrir(saltear: set[Estado], negocio: str) -> dict:
     apertura: sin esta marca, `responder` elegiría la plantilla del estado
     nuevo y el saludo con el nombre del negocio no se mostraría nunca.
 
-    Si el negocio vende un solo servicio, ese paso se saltea Y el servicio
-    queda elegido acá. Saltear el paso sin elegirlo dejaría `servicio_id` en
-    None y la reserva se caería al final, cuando ya no hay nada que preguntar.
-    """
-    cambios = {"estado": siguiente(Estado.APERTURA, saltear).value,
-               "_plantilla": "apertura"}
-    if Estado.ESPERANDO_SERVICIO in saltear:
-        servicios = await _aturno.listar_servicios(negocio)
-        if servicios:
-            cambios["servicio_id"] = servicios[0].id
-    return cambios
+"""
+    return {"estado": siguiente(Estado.APERTURA, saltear).value,
+            "_plantilla": "apertura"}
 
 
 def _limpiar_desde(paso: Estado) -> dict:
@@ -451,8 +443,11 @@ async def _pasos_a_saltear(negocio: str, cfg: dict) -> set[Estado]:
     conocido. Los tres son el mismo criterio.
     """
     saltear = set()
-    if len(await _aturno.listar_servicios(negocio)) <= 1:
-        saltear.add(Estado.ESPERANDO_SERVICIO)
+    # El servicio NO se saltea aunque haya uno solo. Ese primer paso no es
+    # "elegí de la lista": es la única pregunta abierta de toda la conversación,
+    # donde alguien puede decir que quiere un turno, preguntar cualquier cosa o
+    # pedir una persona. Saltearlo ahorra un mensaje y cierra la puerta por la
+    # que entra todo lo que no es reservar.
     if len(await _aturno.listar_personal(negocio)) <= 1:
         saltear.add(Estado.ESPERANDO_STAFF)
     if cfg.get("nombre_cliente"):
@@ -703,10 +698,8 @@ async def _pedir_paso(conv: Conversacion, cfg: dict, negocio: str,
 
     if estado == Estado.ESPERANDO_STAFF:
         gente = await _aturno.listar_personal(negocio, conv.get("servicio_id"))
-        # Con un solo servicio no se hace eco del nombre: ya se dijo en el
-        # saludo, dos renglones más arriba y en el mismo mensaje.
-        nombre_svc = (next((s.nombre for s in servicios if s.id == conv.get("servicio_id")), None)
-                      if len(servicios) > 1 else None)
+        nombre_svc = next((s.nombre for s in servicios
+                           if s.id == conv.get("servicio_id")), None)
         return {"respuesta": P.lista_staff(gente, nombre_svc),
                 "opciones": [p.nombre for p in gente] + ["Me da igual"]}
 

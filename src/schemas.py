@@ -154,6 +154,21 @@ class Disponibilidad(BaseModel):
     )
 
 
+class SinLugar(str, Enum):
+    """Por qué un día no tiene turnos. Los cuatro motivos son distintos.
+
+    Existía un solo booleano `abierto`, y los cuatro casos salían como
+    "cerrado". Decirle a alguien que el local está cerrado un sábado que abre
+    —solo porque el profesional que eligió no trabaja ese día— es información
+    falsa sobre el negocio, y la persona se va convencida de otra cosa.
+    """
+
+    CERRADO = "cerrado"            # el local no abre ese día
+    NO_ATIENDE = "no_atiende"      # abre, pero esa persona no trabaja
+    YA_PASO = "ya_paso"            # abre, pero ya no quedan horas hoy
+    COMPLETO = "completo"          # abre y atiende, pero está todo tomado
+
+
 class DiaConCupo(BaseModel):
     """Un día y cuántos turnos le quedan. Para mostrar antes de que elija.
 
@@ -163,7 +178,15 @@ class DiaConCupo(BaseModel):
 
     fecha: date
     libres: int = Field(ge=0)
-    abierto: bool = True
+    motivo: SinLugar | None = Field(
+        default=None,
+        description="Por qué no hay lugar. None cuando sí hay.",
+    )
+
+    @property
+    def abierto(self) -> bool:
+        """Si el LOCAL abre ese día. No es lo mismo que tener lugar."""
+        return self.motivo != SinLugar.CERRADO
 
 
 class MotivoNoDisponible(str, Enum):

@@ -26,7 +26,10 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from datetime import date, timedelta
 from enum import Enum
+
+from src.fechas import hoy
 
 
 class Estado(str, Enum):
@@ -219,6 +222,55 @@ def _como_hora(texto: str) -> str | None:
     return f"{h:02d}:{mi:02d}" if h < 24 and mi < 60 else None
 
 
+DIAS_SEMANA = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"]
+
+
+def _dia_por_texto(texto: str, opciones: list[str]) -> int | None:
+    """El índice del día que la persona nombró. Sin LLM.
+
+    Las opciones del paso del día son fechas ISO, así que el match por texto
+    no sirve: nadie escribe "2026-08-19". Escriben "el jueves", "mañana" o
+    "el 19". Y encima la lista SALTEA los días sin lugar, así que la
+    numeración tiene huecos y decir solo "respondé con el número" delante de
+    una lista con saltos parece un error del bot.
+
+    Ante dos "jueves" en la lista gana el primero: es el que la gente quiere
+    decir cuando no aclara. Para el otro está el número.
+    """
+    try:
+        fechas = [date.fromisoformat(o) for o in opciones]
+    except ValueError:
+        return None
+
+    limpio = _normalizar(texto)
+    if not limpio:
+        return None
+
+    hoy_ = hoy()
+    relativos = {"hoy": 0, "mañana": 1, "manana": 1,
+                 "pasado": 2, "pasado manana": 2, "pasado mañana": 2}
+    if limpio in relativos:
+        objetivo = hoy_ + timedelta(days=relativos[limpio])
+        return fechas.index(objetivo) if objetivo in fechas else None
+
+    # "el jueves", "jueves que viene", "este viernes"
+    for i, nombre in enumerate(DIAS_SEMANA):
+        if nombre in limpio:
+            for j, f in enumerate(fechas):
+                if f.weekday() == i:
+                    return j
+            return None
+
+    # "el 19", "19/8", "19 de agosto"
+    m = re.search(r"\b(\d{1,2})\b", limpio)
+    if m:
+        numero = int(m.group(1))
+        coinciden = [j for j, f in enumerate(fechas) if f.day == numero]
+        if len(coinciden) == 1:
+            return coinciden[0]
+    return None
+
+
 def opcion_por_nombre(texto: str, opciones: list[str]) -> int | None:
     """El índice de la opción que la persona nombró, sin llamar al LLM.
 
@@ -234,6 +286,11 @@ def opcion_por_nombre(texto: str, opciones: list[str]) -> int | None:
     limpio = _normalizar(texto)
     if not limpio or not opciones:
         return None
+
+    # El paso del día habla en fechas, no en nombres de opción.
+    por_dia = _dia_por_texto(texto, opciones)
+    if por_dia is not None:
+        return por_dia
 
     normalizadas = [_normalizar(o) for o in opciones]
 

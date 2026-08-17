@@ -68,6 +68,7 @@ from src.schemas import (
     EstadoDelTurno,
     MotivoNoDisponible,
     Profesional,
+    SinLugar,
     Servicio,
     TurnoConfirmado,
 )
@@ -322,13 +323,38 @@ class AturnoAPI(ClienteAturno):
         salida = []
         for i in range(dias):
             d = desde + timedelta(days=i)
-            total = len(await self._candidatos(business_id, d, servicio_id, profesional_id))
-            salida.append(DiaConCupo(
-                fecha=d,
-                libres=max(0, total - int(llenos.get(d.isoformat(), 0))),
-                abierto=total > 0,
-            ))
+            candidatos = await self._candidatos(business_id, d, servicio_id, profesional_id)
+            libres = max(0, len(candidatos) - int(llenos.get(d.isoformat(), 0)))
+            salida.append(DiaConCupo(fecha=d, libres=libres,
+                                     motivo=await self._por_que_vacio(
+                                         business_id, d, servicio, profesional_id,
+                                         candidatos, libres)))
         return salida
+
+    async def _por_que_vacio(self, slug: str, dia: date, servicio: dict,
+                             profesional_id: str | None, candidatos: list,
+                             libres: int) -> SinLugar | None:
+        """Por qué ese día no tiene turnos. Los cuatro motivos son distintos.
+
+        Antes esto era `abierto = hay candidatos`, y por lo tanto un sábado que
+        el local abre salía como "cerrado" solo porque el profesional elegido
+        no trabaja los sábados. El bot le informaba mal el horario del negocio
+        a alguien que después no vuelve.
+        """
+        if libres > 0:
+            return None
+
+        del_dia = (await self._negocio(slug)).get("schedule", {}).get(
+            DIAS_JS[dia.weekday()]) or {}
+        if not del_dia.get("enabled") or not del_dia.get("ranges"):
+            return SinLugar.CERRADO
+
+        # El local abre. ¿Por qué no hay nada, entonces?
+        if not await self._tramos(slug, dia, servicio, profesional_id):
+            return SinLugar.NO_ATIENDE       # esa persona no trabaja ese día
+        if not candidatos:
+            return SinLugar.YA_PASO          # había horarios, pero ya pasaron
+        return SinLugar.COMPLETO             # los hay y están todos tomados
 
     async def consultar_disponibilidad(self, business_id: str, servicio_id: str,
                                        dia: date,

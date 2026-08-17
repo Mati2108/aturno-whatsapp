@@ -30,7 +30,14 @@ from datetime import date, timedelta
 
 from src.fechas import hoy as hoy_del_negocio
 
-from src.schemas import Alternativa, DiaConCupo, MotivoNoDisponible, Profesional, Servicio
+from src.schemas import (
+    Alternativa,
+    DiaConCupo,
+    MotivoNoDisponible,
+    Profesional,
+    Servicio,
+    SinLugar,
+)
 
 DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
 
@@ -59,24 +66,33 @@ def apertura(negocio: str, servicios: list[Servicio], nombre: str | None = None)
     Un solo CTA al final: si le das dos, la gente no contesta ninguno.
     """
     saludo = f"Hola {nombre}!" if nombre else "Hola!"
-    lineas = [f"{saludo} Soy el asistente de {negocio}."]
+    lineas = [f"{saludo} Soy el asistente de {negocio}.", ""]
 
-    # Con un solo servicio, la lista numerada sobra: elegir entre una opción no
-    # es elegir. Se dice qué se hace y el pedido lo pone el paso que sigue.
     if len(servicios) == 1:
         s = servicios[0]
-        lineas += ["", f"Sacamos turnos para {s.nombre} — "
-                       f"{s.duracion_minutos} min — {_plata(s.precio)}."]
-        return "\n".join(lineas)
+        lineas.append(f"Sacamos turnos para {s.nombre} — "
+                      f"{s.duracion_minutos} min — {_plata(s.precio)}.")
+    else:
+        lineas.append("Esto es lo que hacemos:")
+        for i, s in enumerate(servicios, 1):
+            lineas.append(f"{i}. {s.nombre} — {s.duracion_minutos} min — "
+                          f"{_plata(s.precio)}")
 
-    lineas += ["", "Esto es lo que hacemos:"]
-    for i, s in enumerate(servicios, 1):
-        lineas.append(f"{i}. {s.nombre} — {s.duracion_minutos} min — {_plata(s.precio)}")
-    # Dos renglones y no uno: el segundo abre la otra puerta. Sin él, la única
-    # acción visible es elegir un servicio, y quien entró a preguntar algo cree
-    # que no puede — o peor, contesta un número al azar para poder seguir.
-    lineas += ["", "Respondé con el número o el nombre del servicio.",
-               "Si querés preguntar algo antes, escribime la pregunta."]
+    # La pregunta es abierta a propósito. Este es el único momento de la
+    # conversación donde no hay una lista que responder, y por eso es por donde
+    # entra todo lo que no es reservar: precios, dónde quedan, si hay lugar
+    # mañana. Un "elegí una opción" acá manda a la gente a contestar un número
+    # al azar para poder seguir, y después preguntar lo que quería preguntar.
+    lineas += ["", "¿Querés sacar un turno o tenés alguna pregunta? "
+                   "Escribime lo que necesites."]
+
+    # La salida a una persona va nombrada, pero al final y en un renglón: si
+    # está escondida no sirve de nada, y si compite con la pregunta de arriba
+    # la mitad la elige sin haber probado. Lo que la inclina es el argumento,
+    # no esconderla — por acá se resuelve ahora, con una persona hay que
+    # esperar a que esté libre.
+    lineas.append("Si preferís hablar con alguien del local, pedímelo y le "
+                  "aviso. Por acá suele salir en un minuto.")
     return "\n".join(lineas)
 
 
@@ -127,6 +143,17 @@ def lista_staff(personas: list[Profesional], servicio: str | None) -> str:
 # T4 · Días
 # ══════════════════════════════════════════════════════════════════
 
+# Cómo se le dice a la persona que ese día no tiene turnos. Cada motivo con
+# sus palabras: "cerrado" cuando el profesional elegido no trabaja es
+# información falsa sobre el negocio.
+_POR_QUE = {
+    SinLugar.CERRADO: "cerrado",
+    SinLugar.NO_ATIENDE: "no atiende ese día",
+    SinLugar.YA_PASO: "ya no quedan horarios",
+    SinLugar.COMPLETO: "completo",
+}
+
+
 def selector_dias(dias: list[DiaConCupo], hoy: date | None = None) -> str:
     """Los próximos N días con su cupo, agrupados por semana.
 
@@ -157,10 +184,8 @@ def selector_dias(dias: list[DiaConCupo], hoy: date | None = None) -> str:
         # numerado es una opción que la persona va a tocar y va a rebotar;
         # mostrarlo sin número mantiene visible la forma de la semana sin
         # ofrecer algo que no existe.
-        if not d.abierto:
-            lineas.append(f"   {_dia_corto(d.fecha)} — cerrado")
-        elif d.libres == 0:
-            lineas.append(f"   {_dia_corto(d.fecha)} — completo")
+        if d.motivo is not None:
+            lineas.append(f"   {_dia_corto(d.fecha)} — {_POR_QUE[d.motivo]}")
         else:
             numero += 1
             plural = "turno" if d.libres == 1 else "turnos"
@@ -169,7 +194,10 @@ def selector_dias(dias: list[DiaConCupo], hoy: date | None = None) -> str:
     if numero == 0:
         return "No me queda ningún día con lugar en las próximas semanas."
 
-    lineas += ["", "Respondé con el número del día."]
+    # Los días sin lugar no llevan número, así que la numeración salta. Decir
+    # solo "respondé con el número" delante de una lista con huecos parece un
+    # error del bot; nombrar el día siempre funciona y es lo que la gente hace.
+    lineas += ["", "Respondé con el número o el día (por ejemplo, «el jueves»)."]
     return "\n".join(lineas)
 
 
@@ -181,7 +209,7 @@ def dias_elegibles(dias: list[DiaConCupo]) -> list[DiaConCupo]:
     en algún momento se desincronizan y el número 3 deja de ser el que la
     persona vio en pantalla.
     """
-    return [d for d in dias if d.abierto and d.libres > 0]
+    return [d for d in dias if d.motivo is None and d.libres > 0]
 
 
 def _encabezado_semana(bloque: int) -> str:
