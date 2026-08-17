@@ -20,6 +20,7 @@ latencia real de un agente. Cambiarlo después sería rehacer esta capa entera.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import BackgroundTasks, FastAPI, Form, Header, HTTPException, Request
@@ -40,6 +41,11 @@ from src.rag.indice import modelo_en_uso
 from src.schemas import MensajeEntrante, Tenant
 
 logger = logging.getLogger("pipeline.webhook")
+
+# Cuánto puede tardar el procesamiento antes de abandonarlo. Un turno normal
+# lleva ~2 segundos; treinta es holgado para un arranque en frío y sigue muy
+# por debajo de la paciencia de una persona esperando en WhatsApp.
+TECHO_SEGUNDOS = 30
 
 
 def _configurar_logs() -> None:
@@ -239,7 +245,24 @@ async def _procesar_y_responder(
     _mostrar_escribiendo(message_sid)
 
     try:
-        texto = await _componer_respuesta(mensaje, negocio)
+        # Con techo de tiempo. Un except no alcanza: si el procesamiento se
+        # CUELGA en vez de fallar —una conexión a la base que no responde, una
+        # llamada al modelo que nunca vuelve— la excepción no llega nunca y la
+        # persona se queda esperando sin enterarse de nada. Pasó en producción:
+        # el webhook devolvía 200 y no salía ninguna respuesta, ni siquiera un
+        # error.
+        texto = await asyncio.wait_for(
+            _componer_respuesta(mensaje, negocio), timeout=TECHO_SEGUNDOS
+        )
+    except asyncio.TimeoutError:
+        logger.error(
+            "El procesamiento de %s superó los %ds y se abandonó",
+            mensaje.de, TECHO_SEGUNDOS,
+        )
+        texto = (
+            "Perdón, estoy tardando más de lo normal. "
+            "¿Me lo mandás de nuevo?"
+        )
     except Exception:  # noqa: BLE001 — el usuario merece una respuesta igual
         logger.exception("Falló al procesar el mensaje de %s", mensaje.de)
         texto = (
