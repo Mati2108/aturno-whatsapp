@@ -223,7 +223,16 @@ async def main() -> int:
     print(f"{NEGRITA}  ¿ESTÁ LISTO «{slug}» PARA PRENDER EL BOT?{FIN}")
     print(f"{'═' * 70}")
 
-    inf = await revisar(slug)
+    try:
+        inf = await revisar(slug)
+    except LookupError as e:
+        # El slug equivocado es el error más probable de todos: se escribe a
+        # mano. Un traceback acá manda a leer código por algo que se arregla
+        # mirando la URL de la página del negocio.
+        print(f"\n  {ROJO}✗{FIN} {e}")
+        print(f"  {GRIS}El slug es lo que va después del dominio en la página "
+              f"pública: aturno.app/<slug>{FIN}\n")
+        return 2
 
     if inf.rompe:
         print(f"\n{ROJO}{NEGRITA}  HAY QUE ARREGLAR ESTO ANTES{FIN}")
