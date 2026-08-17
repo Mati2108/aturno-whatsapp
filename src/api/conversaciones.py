@@ -77,6 +77,11 @@ class EventoDeConversacion(BaseModel):
     momento: str
     # Cuando esto es true, el panel tiene que hacer ruido.
     necesita_humano: bool = False
+    # Distinto de lo de arriba, y confundirlos rompió el panel: `necesita_humano`
+    # es "el cliente está esperando" y se apaga apenas el negocio contesta;
+    # esto es "la conversación es del negocio" y sigue prendido hasta que el
+    # bot la retoma. El botón para devolverla depende de ESTE.
+    en_manos_humanas: bool = False
     paso: str | None = None
 
 
@@ -121,8 +126,8 @@ async def avisar_a_aturno(evento: EventoDeConversacion) -> bool:
 
 
 def evento(business_id: str, telefono: str, texto: str, *, de_quien: str,
-           necesita_humano: bool = False, paso: str | None = None
-           ) -> EventoDeConversacion:
+           necesita_humano: bool = False, en_manos_humanas: bool = False,
+           paso: str | None = None) -> EventoDeConversacion:
     """Arma el evento. `de_quien` es 'cliente', 'bot' o 'negocio'."""
     return EventoDeConversacion(
         business_id=business_id,
@@ -132,5 +137,6 @@ def evento(business_id: str, telefono: str, texto: str, *, de_quien: str,
         autor=de_quien,
         momento=ahora().isoformat(),
         necesita_humano=necesita_humano,
+        en_manos_humanas=en_manos_humanas,
         paso=paso,
     )

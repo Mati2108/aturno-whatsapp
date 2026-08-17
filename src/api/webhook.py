@@ -395,8 +395,12 @@ async def responder_desde_el_panel(
         logger.exception("el panel no pudo mandar el mensaje")
         return Enviado(enviado=False, detalle=str(e)[:120], momento=ahora().isoformat())
 
+    # El negocio contestó: deja de estar esperando, pero la conversación SIGUE
+    # siendo suya. Sin esta distinción el botón de devolvérsela al bot
+    # desaparecía justo después de contestar, que es cuando hace falta.
     await avisar_a_aturno(evento(
-        mensaje.business_id, mensaje.telefono, mensaje.texto, de_quien="negocio"))
+        mensaje.business_id, mensaje.telefono, mensaje.texto,
+        de_quien="negocio", en_manos_humanas=True))
     return Enviado(enviado=True, detalle="ok", momento=ahora().isoformat())
 
 
@@ -433,8 +437,9 @@ async def devolver_al_bot(
                        momento=ahora().isoformat())
 
     _enviar(mensaje.telefono, negocio, texto)
+    # en_manos_humanas=False: el bot la retomó. Es lo que apaga el botón.
     await avisar_a_aturno(evento(mensaje.business_id, mensaje.telefono, texto,
-                                 de_quien="bot"))
+                                 de_quien="bot", en_manos_humanas=False))
     return Enviado(enviado=True, detalle="ok", momento=ahora().isoformat())
 
 
@@ -621,10 +626,10 @@ async def _procesar_y_responder(
         except Exception:  # noqa: BLE001
             pass
 
+    en_manos = estado_ahora == Estado.EN_MANOS_HUMANAS.value
     await avisar_a_aturno(evento(
         negocio.business_id, mensaje.de, mensaje.texto, de_quien="cliente",
-        necesita_humano=estado_ahora == Estado.EN_MANOS_HUMANAS.value,
-        paso=estado_ahora,
+        necesita_humano=en_manos, en_manos_humanas=en_manos, paso=estado_ahora,
     ))
 
     # Un texto vacío es el bot callándose a propósito: la conversación está en
