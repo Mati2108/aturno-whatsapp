@@ -64,9 +64,37 @@ cuenta. Sin service account, sin token de admin, sin clave de Firebase.
 
 Se activa con `ATURNO_MODO=api` + `ATURNO_API_URL`.
 
-**Lo verificado hasta ahora:** que importa, la intersección de horarios y que
-los tests del flujo siguen pasando. **Lo que falta:** correrlo contra un
-negocio de verdad. Hasta que eso pase, esto no está probado.
+**Lo verificado contra el negocio real `aturno`:** lee bien servicios
+(Dentista), staff (Juan Demo, Matias Calo) y el horario del negocio, incluido
+que los viernes está cerrado. **Lo que falta:** crear un turno, bloqueado por
+lo de abajo.
+
+#### El backend desplegado está atrasado
+
+`aturno-backend` en Render sirve un commit anterior al **59a0315 (6/8/2026)**.
+Comprobado: responde a `check-availability`, que no existe en `main`, y no
+responde a `/ocupacion` ni a `/horarios-ocupados`, que sí están en
+`limpieza-estructura`. O sea que Render ya sigue la rama correcta y quedó
+clavado en un commit viejo. **No hay que mergear nada**: alcanza con
+"Manual Deploy → Deploy latest commit".
+
+Mientras tanto, el deploy viejo tiene la versión rota de `check-availability`
+—la que arrancaba `available` en `false` y contestaba "no disponible" para
+todos los horarios de todos los servicios, según el comentario del propio
+código—. Nadie lo había notado porque el frontend no llama a ese endpoint: este
+bot es su primer consumidor real.
+
+Dos cosas más que salieron de ahí:
+
+- `serviceId` tiene que viajar como **string**. Con el id numérico el backend
+  tira 500 (`db.collection(...).doc(number)`). El adaptador ya manda string.
+- El negocio `aturno` tiene `timeZone: "America/New_York"`. De ahí salen los
+  eventos de Google Calendar y los recordatorios: hay que corregirlo en el
+  panel o los avisos van a llegar con horas de diferencia.
+
+El adaptador funciona igual contra un backend viejo: si falta
+`/horarios-ocupados`, pregunta horario por horario con `check-availability`
+(concurrencia limitada a 6).
 
     python probar_aturno_real.py <slug>              # solo lee
     python probar_aturno_real.py <slug> --reservar   # crea un turno real

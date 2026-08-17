@@ -333,6 +333,19 @@ class AturnoAPI(ClienteAturno):
         r = await self._http.post(
             f"{self._base}/api/public/horarios-ocupados", json=cuerpo
         )
+        if r.status_code == 404:
+            # El backend del negocio es anterior a este endpoint. En vez de
+            # fallar, se pregunta horario por horario con `check-availability`,
+            # que existe desde siempre. Es más lento —un pedido por horario en
+            # vez de uno por día— pero la alternativa es que el bot no funcione
+            # contra un aturno desactualizado, y quién despliega el backend no
+            # es quien despliega el bot.
+            libres = await self._libres_uno_por_uno(
+                business_id, servicio_id, dia, candidatos, profesional_id)
+            logger.info("%s %s: %d candidatos, %d libres (modo compatible)",
+                        business_id, dia, len(candidatos), len(libres))
+            return Disponibilidad(fecha=dia, servicio_id=servicio_id,
+                                  profesional_id=profesional_id, horarios=libres)
         r.raise_for_status()
         ocupados = set(r.json().get("ocupados") or [])
 
@@ -341,6 +354,47 @@ class AturnoAPI(ClienteAturno):
                     business_id, dia, len(candidatos), len(libres))
         return Disponibilidad(fecha=dia, servicio_id=servicio_id,
                               profesional_id=profesional_id, horarios=libres)
+
+    async def _libres_uno_por_uno(self, slug: str, servicio_id: str, dia: date,
+                                  candidatos: list[time],
+                                  profesional_id: str | None) -> list[time]:
+        """Plan B: preguntar horario por horario cuando falta el endpoint del día.
+
+        La concurrencia va limitada a propósito. Sin tope, un día con veinte
+        horarios dispara veinte pedidos simultáneos contra un backend que puede
+        estar despertándose, y lo que se gana en paralelismo se pierde en
+        timeouts. Seis alcanza para que un día entero resuelva en pocos
+        segundos sin castigarlo.
+        """
+        servicio = await self._servicio_crudo(slug, servicio_id)
+        nombre_prof = None
+        if profesional_id:
+            nombre_prof = (await self._staff_crudo(slug, profesional_id) or {}).get("name")
+        uid = await self._uid(slug)
+        tope = asyncio.Semaphore(6)
+
+        async def libre(h: time) -> time | None:
+            cuerpo = {"businessId": uid, "date": dia.isoformat(),
+                      "time": h.strftime("%H:%M"), "serviceId": servicio_id,
+                      "serviceName": servicio.get("name")}
+            if profesional_id:
+                cuerpo["staffId"] = profesional_id
+                cuerpo["staffName"] = nombre_prof
+            async with tope:
+                try:
+                    r = await self._http.post(
+                        f"{self._base}/api/bookings/check-availability", json=cuerpo)
+                    r.raise_for_status()
+                    return h if r.json().get("available") else None
+                except Exception:
+                    # Un horario que no se pudo consultar NO se ofrece. Ofrecer
+                    # a ciegas y que rebote al confirmar es peor que mostrar uno
+                    # menos: la persona ya eligió y se le cae encima.
+                    logger.warning("no se pudo consultar %s %s", dia, h, exc_info=False)
+                    return None
+
+        resultados = await asyncio.gather(*(libre(h) for h in candidatos))
+        return [h for h in resultados if h is not None]
 
     async def consultar_pedido(self, business_id: str, servicio_id: str, dia: date,
                                hora: time,
