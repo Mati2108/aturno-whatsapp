@@ -34,6 +34,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from src.agentes import flujo
 from src.agentes.flujo import construir_flujo, hilo_de
+from src.aturno.base import ClienteAturno
 from src.aturno.doble import AturnoDoble
 from src.config import TENANTS, config, tenant_por_numero
 from src.fechas import calendario
@@ -70,10 +71,26 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# Por ahora el doble en memoria. Cuando conectemos la API real de aturno se
-# cambia por AturnoAPI acá y nada más en todo el archivo cambia — para eso
-# existe el contrato de src/aturno/base.py.
-aturno = AturnoDoble()
+def _cliente_aturno() -> ClienteAturno:
+    """Contra qué habla el bot: el backend real o el doble en memoria.
+
+    ATURNO_MODO=api    turnos reales, en la misma agenda que la web
+    ATURNO_MODO=doble  en memoria, sin red — para tests y para desarrollar
+
+    Esta función es el único lugar del proyecto que sabe cuál de las dos está
+    en uso. Todo lo demás habla con `ClienteAturno` y no nota la diferencia:
+    para eso existe el contrato de src/aturno/base.py.
+    """
+    cfg = config()
+    if cfg.aturno_modo == "api":
+        from src.aturno.api import AturnoAPI
+
+        logger.info("aturno REAL en %s", cfg.aturno_api_url)
+        return AturnoAPI(cfg.aturno_api_url)
+    return AturnoDoble()
+
+
+aturno: ClienteAturno = _cliente_aturno()
 
 # El grafo y la conexión a Postgres viven todo el proceso. Se arman una sola
 # vez: abrir el checkpointer por mensaje agregaría latencia a cada respuesta.
