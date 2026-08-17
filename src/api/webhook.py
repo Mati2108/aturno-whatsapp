@@ -24,6 +24,7 @@ import logging
 
 from fastapi import BackgroundTasks, FastAPI, Form, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel, Field
 from twilio.request_validator import RequestValidator
 from twilio.rest import Client
 
@@ -109,17 +110,35 @@ def _twilio() -> Client:
 
 
 # ---------- Salud ----------
-@app.get("/salud")
-async def salud() -> dict:
+class Salud(BaseModel):
+    """La respuesta de /salud, tipada.
+
+    El Capstone pide validar con Pydantic las entradas Y las salidas de la API.
+    Un `-> dict` compila igual pero no documenta ni valida nada: con el modelo,
+    FastAPI publica el esquema en /docs y falla si el endpoint devuelve algo
+    que no encaja.
+    """
+
+    estado: str = Field(description="'ok' si el servicio responde.")
+    proveedor_llm: str = Field(description="Proveedor de LLM configurado.")
+    embeddings: str = Field(description="Modelo de embeddings en uso.")
+    aturno_modo: str = Field(description="'doble' en memoria o 'api' real.")
+    firma_validada: bool = Field(description="Si se verifica la firma de Twilio.")
+    trazado: bool = Field(description="Si las trazas van a Phoenix.")
+
+
+@app.get("/salud", response_model=Salud)
+async def salud() -> Salud:
     """Chequeo rápido: ¿está vivo y con qué configuración?"""
     cfg = config()
-    return {
-        "estado": "ok",
-        "proveedor_llm": cfg.provider,
-        "aturno_modo": cfg.aturno_modo,
-        "firma_validada": cfg.validar_firma,
-        "trazado": trazado_activo(),
-    }
+    return Salud(
+        estado="ok",
+        proveedor_llm=cfg.provider,
+        embeddings=modelo_en_uso().split("/")[-1],
+        aturno_modo=cfg.aturno_modo,
+        firma_validada=cfg.validar_firma,
+        trazado=trazado_activo(),
+    )
 
 
 # ---------- El webhook ----------
