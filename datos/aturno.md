@@ -1,13 +1,13 @@
-# matimatigoals
+# Aturno
 
-Este archivo es el conocimiento que el bot puede citar sobre este negocio. Se
-arma respondiendo `datos/CUESTIONARIO.md`.
+Conocimiento que el bot puede citar sobre este negocio. Se arma respondiendo
+`datos/CUESTIONARIO.md`.
 
 Las secciones de abajo salen de datos verificados contra la API de aturno el
-17/08/2026. Todo lo demás del cuestionario —estacionamiento, medios de pago,
-tolerancia de llegada tarde, qué traer— **no está respondido, y por eso no
-figura acá**. Mientras falte, el bot dice que no lo tiene cargado en vez de
-inventarlo.
+17/08/2026. Lo que el cuestionario pregunta y todavía nadie respondió
+—estacionamiento, medios de pago, tolerancia de llegada tarde, qué traer— **no
+figura acá a propósito**. Mientras falte, el bot dice que no lo tiene cargado
+en vez de inventarlo.
 
 ## Horarios de atención
 
@@ -30,7 +30,8 @@ atención termine antes del cierre.
 Juan Demo y Matias Calo.
 
 Se puede pedir turno con una persona en particular o dejar que se asigne según
-la disponibilidad del día.
+la disponibilidad del día. Juan Demo atiende de lunes a jueves; Matias Calo,
+todos los días que el local abre.
 
 ## Dónde estamos
 
@@ -47,4 +48,9 @@ El turno se saca por acá mismo, sin cuenta y sin descargar nada: elegís el
 servicio, con quién, el día y el horario.
 
 Al confirmar llega un código de reserva. Con ese código se puede consultar o
-cancelar el turno.
+cancelar el turno desde la página.
+
+## Reservar desde la página
+
+También se puede reservar en aturno.app/aturno, con los mismos horarios y la
+misma agenda. Por WhatsApp no hace falta entrar.
