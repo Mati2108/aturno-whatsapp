@@ -85,13 +85,35 @@ async def revisar(slug: str) -> Informe:
         else:
             inf.ok(f"Se presenta como «{nombre}»")
 
+        # La zona horaria del negocio importa MENOS de lo que parece, y decirlo
+        # con precisión es la diferencia entre un aviso útil y una hora perdida
+        # buscando una pantalla que no existe.
+        #
+        # En todo el backend se lee en UN solo lugar: al crear el evento en
+        # Google Calendar (server.js:6329). Reservar la ignora a propósito
+        # ("FORZAR SIEMPRE ARGENTINA", server.js:3381) y los recordatorios usan
+        # un -03:00 fijo (recordatorios.js:21). Sin Calendar conectado, el campo
+        # no decide nada.
+        #
+        # Y no se arregla desde el panel: se escribe una sola vez al registrarse,
+        # tomándola del navegador, y ninguna pantalla la edita.
         huso = doc.get("timeZone")
-        if huso not in HUSOS_AR:
-            inf.mal(f"La zona horaria es «{huso}»",
-                    "De ahí salen los recordatorios y los eventos de Google Calendar: "
-                    "van a llegar con horas de diferencia. Ponela en Buenos Aires.")
-        else:
+        integraciones = doc.get("integrations") or {}
+        calendar = integraciones.get("googleCalendar") or integraciones.get("google_calendar")
+        conectado = bool(calendar) and calendar is not False
+        if huso in HUSOS_AR:
             inf.ok(f"Zona horaria correcta ({huso})")
+        elif conectado:
+            inf.mal(f"La zona horaria es «{huso}» y Google Calendar está conectado",
+                    "Los eventos van a caer con horas de diferencia. No se cambia "
+                    "desde el panel: hay que corregirla en la base o desconectar "
+                    "Calendar.")
+        else:
+            inf.flojo(f"La zona horaria dice «{huso}»",
+                      "No afecta turnos ni recordatorios: reservar la ignora a "
+                      "propósito y los recordatorios usan -03:00 fijo. Solo "
+                      "importaría si conectás Google Calendar. No se edita desde "
+                      "el panel.")
 
         # ---- por dónde hablar con una persona ----
         contacto = await api.contacto(slug)
