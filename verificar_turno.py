@@ -93,6 +93,17 @@ def elegir_dia(opciones: list[str]) -> str:
     return str(len(fechas))       # no hay ninguno tan lejos: el último que haya
 
 
+def pedir_servicio(opciones: list[str]) -> str:
+    """Pide el primer servicio del negocio, con sus palabras.
+
+    Escrito así y no con un nombre fijo porque la prueba tiene que servir para
+    cualquier negocio: con "quiero un turno con el dentista" pasaba contra el
+    negocio real y fallaba contra el doble, que vende cortes de pelo. Una
+    prueba que solo anda contra un negocio no prueba el producto.
+    """
+    return f"quiero un turno para {opciones[0].lower()}" if opciones else "quiero un turno"
+
+
 # El orden real del flujo es: servicio → profesional → día → horario → nombre →
 # confirmación. Cualquier guion que se saltee un paso desalinea todo lo que
 # sigue, así que están escritos completos.
@@ -107,7 +118,7 @@ ESCENARIOS = [
         "nombre": "Escribiendo, sin usar los números",
         "prueba": "que se pueda hablar normal y no solo tocar opciones",
         "cliente": "Bruno Díaz",
-        "guion": ["hola", "quiero un turno con el dentista", "me da igual",
+        "guion": ["hola", pedir_servicio, "me da igual",
                   elegir_dia, "1", "Bruno Díaz", "dale"],
     },
     {
