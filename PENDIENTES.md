@@ -214,6 +214,48 @@ proveedor de WhatsApp Business API. Conectarlo exige pegamento de terceros
 
 ---
 
+## 🔵 Lo que falta del lado de aturno
+
+### La app tiene que recibir la escalación
+
+Cuando alguien pide hablar con una persona, el bot ya hace su mitad: marca la
+conversación, se calla, y manda un aviso (`src/escalacion.py`). Falta la otra
+mitad, que vive en aturno:
+
+1. Un endpoint que reciba el POST con el `Escalacion` — negocio, teléfono,
+   nombre, motivo, en qué paso estaba y su último mensaje.
+2. Que eso aparezca como **notificación en la app**.
+3. Una caja de texto para que quien atiende responda en ese hilo. Los mensajes
+   salen por el mismo número de WhatsApp, así que para el cliente no cambia
+   nada.
+
+Se configura con `ESCALACION_WEBHOOK`. **Mientras no exista**, el bot es
+honesto: dice que no pudo avisar y pasa el teléfono, en vez de prometer una
+respuesta que no va a llegar. El aviso igual queda en el log con todo lo
+necesario para atenderlo a mano.
+
+Detalles que ya están resueltos de este lado:
+
+- El bot **se calla** mientras la conversación es del negocio. Sin eso, la
+  persona recibiría listas de horarios encima de quien la está atendiendo.
+- **Vuelve solo** a los 45 minutos sin respuesta (`ESCALACION_MINUTOS`), o
+  cuando la persona escribe "seguir con el bot". Un chat mudo para siempre es
+  peor que un bot.
+- **No se pierde nada**: al volver, la conversación sigue en el mismo paso.
+- Escalar por confusión **exige que la conversación haya avanzado**. Sin esa
+  condición, dos mensajes de basura desde cualquier número le hacían sonar el
+  teléfono al dueño — un canal de aviso que cualquiera dispara gratis se
+  ignora en una semana.
+
+### El link a la página pública
+
+`ATURNO_WEB_URL` no está configurada, así que el bot todavía no ofrece el link
+a quien prefiera reservar desde la web. Falta el dominio de producción del
+frontend (la página de un negocio es `<web>/<slug>`). Sin eso configurado el
+bot dice que se puede hacer por WhatsApp, en vez de mandar un link roto.
+
+---
+
 ## 🟢 Mejoras del bot
 
 Salieron de usarlo, no de imaginarlo.

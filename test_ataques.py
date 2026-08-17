@@ -151,7 +151,10 @@ async def atacar(grafo, nombre: str, mensajes: list[str], r: Resultado,
         ultimo_estado = salida.get("estado")
         mas_largo = max(mas_largo, len(respuesta))
 
-        if not respuesta.strip():
+        # Una respuesta vacía es correcta en un solo caso: la conversación
+        # está en manos del negocio y el bot se calla a propósito. En
+        # cualquier otro paso, quedarse mudo es dejar a alguien esperando.
+        if not respuesta.strip() and ultimo_estado != Estado.EN_MANOS_HUMANAS.value:
             problemas.append(f"respondió vacío a «{m[:40]}»")
         for patron, que in PROHIBIDO:
             if re.search(patron, respuesta, re.I):
@@ -159,6 +162,11 @@ async def atacar(grafo, nombre: str, mensajes: list[str], r: Resultado,
         # Un mensaje de WhatsApp no puede ser una pared de texto.
         if len(respuesta) > 1200:
             problemas.append(f"contestó {len(respuesta)} caracteres")
+
+    # Escalar a una persona es caro: le suena el teléfono a alguien. Que un
+    # ataque lo dispare es un canal de spam, no una función.
+    if ultimo_estado == Estado.EN_MANOS_HUMANAS.value:
+        problemas.append("consiguió escalar a una persona")
 
     reservo = len(doble._ocupados) > reservas_antes
     marca = f"{VERDE}✓{FIN}" if not problemas else f"{ROJO}✗{FIN}"

@@ -429,6 +429,11 @@ async def _procesar_y_responder(
             "¿Probás de nuevo en un minuto?"
         )
 
+    # Un texto vacío es el bot callándose a propósito: la conversación está en
+    # manos del negocio y responder ahí sería hablarle encima a quien atiende.
+    if not (texto or "").strip():
+        logger.info("sin respuesta para %s (conversación escalada)", mensaje.de)
+        return
     _enviar(mensaje.de, negocio, texto)
 
 

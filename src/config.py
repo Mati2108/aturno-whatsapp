@@ -71,6 +71,21 @@ class Config(BaseSettings):
     aturno_modo: str = "doble"  # "doble" (en memoria) | "api" (backend real)
     aturno_api_url: str = "http://localhost:3001"
 
+    # La web pública de aturno, para poder mandarle el link a quien prefiera
+    # reservar desde ahí. La página de un negocio es <web>/<slug>.
+    # Vacío a propósito: sin esto configurado el bot NO ofrece el link, en vez
+    # de mandar uno inventado que lleva a un 404.
+    aturno_web_url: str = ""
+
+    # A dónde avisar cuando alguien pide hablar con una persona. Lo implementa
+    # aturno; mientras no exista, el aviso queda en el log del servicio.
+    escalacion_webhook: str = ""
+
+    # Cuánto espera el bot, callado, después de escalar. Pasado ese rato sin
+    # que nadie del negocio conteste, vuelve a tomar la conversación en vez de
+    # dejar a la persona hablándole a un chat mudo.
+    escalacion_minutos: int = 45
+
 
 @lru_cache
 def config() -> Config:

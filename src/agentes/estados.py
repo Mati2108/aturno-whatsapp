@@ -40,6 +40,9 @@ class Estado(str, Enum):
     ESPERANDO_NOMBRE = "esperando_nombre"
     ESPERANDO_CONFIRMACION = "esperando_confirmacion"
     CONFIRMADO = "confirmado"
+    # La conversación es del negocio, no del bot. No está en ORDEN: no es un
+    # paso del formulario, es una pausa que puede pasar en cualquier momento.
+    EN_MANOS_HUMANAS = "en_manos_humanas"
 
 
 class Intencion(str, Enum):
@@ -64,6 +67,8 @@ class Intencion(str, Enum):
     CANCELAR = "cancelar"
     VER_MAS = "ver_mas"                 # más horarios
     HABLAR_CON_PERSONA = "hablar_con_persona"   # la salida de emergencia
+    PEDIR_LINK = "pedir_link"           # prefiere reservar desde la web
+    VOLVER_AL_BOT = "volver_al_bot"     # sale de manos humanas
     DESCONOCIDO = "desconocido"
 
 
@@ -175,6 +180,13 @@ ATAJOS: dict[Estado | None, dict[frozenset[str], Intencion]] = {
         frozenset({"mas", "mas horarios", "otro horario", "otros horarios",
                    "mas tarde", "mostrame mas", "ver mas"}):
             Intencion.VER_MAS,
+        frozenset({"el link", "link", "mandame el link", "pasame el link",
+                   "la pagina", "por la pagina", "por la web", "desde la web",
+                   "prefiero la web", "link de la pagina", "quiero el link"}):
+            Intencion.PEDIR_LINK,
+        frozenset({"volver al bot", "seguir con el bot", "bot", "seguir sola",
+                   "seguir solo", "sigo yo", "dejalo al bot"}):
+            Intencion.VOLVER_AL_BOT,
     },
 }
 
@@ -195,6 +207,56 @@ def respuesta_fija(texto: str, estado: Estado) -> tuple[Intencion, dict] | None:
                 entidades = ({"profesional": "cualquiera"}
                              if intencion == Intencion.ELEGIR_STAFF else {})
                 return intencion, entidades
+    return None
+
+
+def _como_hora(texto: str) -> str | None:
+    """'9:30', '930', '9.30' -> '09:30'. None si no parece una hora."""
+    m = re.fullmatch(r"(\d{1,2})[:. ]?(\d{2})", texto.strip())
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    return f"{h:02d}:{mi:02d}" if h < 24 and mi < 60 else None
+
+
+def opcion_por_nombre(texto: str, opciones: list[str]) -> int | None:
+    """El índice de la opción que la persona nombró, sin llamar al LLM.
+
+    La lista dice "1. Juan Demo" y alguien contesta "Juan". Eso no es un número
+    ni hace falta un modelo para resolverlo: está escrito en la pantalla que le
+    acabamos de mandar. Antes iba al clasificador y costaba una llamada entera.
+
+    Se exige que el match sea ÚNICO. Con "Juan Demo" y "Juana Pérez" en la
+    misma lista, "Juan" es ambiguo, y ahí se prefiere volver a mostrar la lista
+    antes que elegir por la persona. Elegir mal un profesional es peor que
+    preguntar de nuevo.
+    """
+    limpio = _normalizar(texto)
+    if not limpio or not opciones:
+        return None
+
+    normalizadas = [_normalizar(o) for o in opciones]
+
+    # Horarios: "9:30" tiene que encontrar "09:30".
+    hora = _como_hora(texto)
+    if hora:
+        for i, o in enumerate(opciones):
+            if o.strip() == hora:
+                return i
+
+    if limpio in normalizadas:
+        return normalizadas.index(limpio)
+
+    # Match parcial, solo si es inequívoco y la persona escribió lo suficiente
+    # como para que no sea una coincidencia boba.
+    if len(limpio) >= 3:
+        empiezan = [i for i, o in enumerate(normalizadas) if o.startswith(limpio)]
+        if len(empiezan) == 1:
+            return empiezan[0]
+    if len(limpio) >= 4:
+        contienen = [i for i, o in enumerate(normalizadas) if limpio in o]
+        if len(contienen) == 1:
+            return contienen[0]
     return None
 
 

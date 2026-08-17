@@ -59,14 +59,24 @@ def apertura(negocio: str, servicios: list[Servicio], nombre: str | None = None)
     Un solo CTA al final: si le das dos, la gente no contesta ninguno.
     """
     saludo = f"Hola {nombre}!" if nombre else "Hola!"
-    lineas = [
-        f"{saludo} Soy el asistente de {negocio}.",
-        "",
-        "Esto es lo que hacemos:",
-    ]
+    lineas = [f"{saludo} Soy el asistente de {negocio}."]
+
+    # Con un solo servicio, la lista numerada sobra: elegir entre una opción no
+    # es elegir. Se dice qué se hace y el pedido lo pone el paso que sigue.
+    if len(servicios) == 1:
+        s = servicios[0]
+        lineas += ["", f"Sacamos turnos para {s.nombre} — "
+                       f"{s.duracion_minutos} min — {_plata(s.precio)}."]
+        return "\n".join(lineas)
+
+    lineas += ["", "Esto es lo que hacemos:"]
     for i, s in enumerate(servicios, 1):
         lineas.append(f"{i}. {s.nombre} — {s.duracion_minutos} min — {_plata(s.precio)}")
-    lineas += ["", "Respondé con el número del servicio que querés."]
+    # Dos renglones y no uno: el segundo abre la otra puerta. Sin él, la única
+    # acción visible es elegir un servicio, y quien entró a preguntar algo cree
+    # que no puede — o peor, contesta un número al azar para poder seguir.
+    lineas += ["", "Respondé con el número o el nombre del servicio.",
+               "Si querés preguntar algo antes, escribime la pregunta."]
     return "\n".join(lineas)
 
 
@@ -96,11 +106,20 @@ def lista_servicios(servicios: list[Servicio], preseleccion: str | None = None) 
 # T3 · Staff
 # ══════════════════════════════════════════════════════════════════
 
-def lista_staff(personas: list[Profesional], servicio: str) -> str:
-    lineas = [f"{servicio}. ¿Con quién lo querés?", ""]
+def lista_staff(personas: list[Profesional], servicio: str | None) -> str:
+    """El equipo. `servicio=None` omite el eco del servicio elegido.
+
+    Ese eco confirma lo que la persona acaba de elegir, y por eso está. Pero
+    cuando este pedido va pegado al saludo —el caso del negocio con un solo
+    servicio— el nombre ya se dijo dos renglones arriba, y repetirlo suena a
+    que el bot no se acuerda de lo que escribió recién.
+    """
+    encabezado = f"{servicio}. ¿Con quién lo querés?" if servicio else "¿Con quién lo querés?"
+    lineas = [encabezado, ""]
     for i, p in enumerate(personas, 1):
         lineas.append(f"{i}. {p.nombre}")
-    lineas += [f"{len(personas) + 1}. Me da igual", "", "Respondé con el número."]
+    lineas += [f"{len(personas) + 1}. Me da igual", "",
+               "Respondé con el número o el nombre."]
     return "\n".join(lineas)
 
 
@@ -274,6 +293,62 @@ def error_tecnico() -> str:
         "Uy, se me complicó procesar eso. ¿Probamos de nuevo en un minuto?\n\n"
         "Si preferís, escribime «hablar con una persona»."
     )
+
+
+def escalado(nombre_negocio: str, aviso_llego: bool, contacto) -> str:
+    """Lo que se le dice a la persona cuando la conversación pasa al negocio.
+
+    La diferencia con dar un teléfono es toda: el teléfono le pasa el trabajo a
+    la persona —que llame ella, desde un chat que ya tenía abierto—, y esto lo
+    deja del lado del negocio. Por eso el mensaje dice que ya se avisó, no que
+    llame.
+
+    Si el aviso NO llegó a ningún lado, se dice y se pasa el contacto. Prometer
+    que alguien va a responder cuando nadie se enteró es la peor variante: la
+    persona espera, y espera al pedo.
+    """
+    if aviso_llego:
+        return "\n".join([
+            f"Listo, le avisé a {nombre_negocio}. Te responden por acá mismo.",
+            "",
+            "Mientras tanto no toco nada de lo que veníamos armando.",
+            "Si preferís seguir sola, escribime «seguir con el bot».",
+        ])
+
+    lineas = [f"No pude avisarle a {nombre_negocio} desde acá, así que te paso "
+              "el contacto directo:"]
+    if contacto and contacto.hay_algo():
+        lineas.append("")
+        if contacto.telefono:
+            lineas.append(f"Teléfono: {contacto.telefono}")
+        if contacto.email:
+            lineas.append(f"Email: {contacto.email}")
+    lineas += ["", "Tu turno queda como está. Cuando quieras seguimos."]
+    return "\n".join(lineas)
+
+
+def volvio_el_bot(reintento: str) -> str:
+    """El bot retoma. Repite el pedido del paso para no dejarla colgada."""
+    return "\n".join(["Sigo yo.", "", reintento])
+
+
+def link_web(nombre_negocio: str, url: str | None) -> str:
+    """El link a la página, para quien prefiera reservar ahí.
+
+    Sin URL configurada no se inventa ninguna: se dice que se puede seguir por
+    acá. Un link roto es peor que no dar link — la persona lo abre, ve un 404 y
+    asume que el negocio no funciona.
+    """
+    if not url:
+        return ("No tengo el link a mano, pero lo podemos hacer por acá mismo "
+                "y te queda el turno igual. ¿Seguimos?")
+    return "\n".join([
+        f"Ahí va la página de {nombre_negocio}:",
+        "",
+        url,
+        "",
+        "Si preferís, lo cerramos por acá y no hace falta que entres.",
+    ])
 
 
 def hablar_con_persona(nombre_negocio: str, contacto) -> str:

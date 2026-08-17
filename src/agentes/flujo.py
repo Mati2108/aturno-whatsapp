@@ -43,10 +43,14 @@ from src.agentes.estados import (
     Intencion,
     anterior,
     numero_elegido,
+    opcion_por_nombre,
     respuesta_fija,
     siguiente,
 )
 from src.aturno.base import ClienteAturno
+from src.config import config
+from src.escalacion import Escalacion, notificar
+from src.fechas import ahora
 from src.fechas import hoy as hoy_del_negocio
 from src.rag.indice import Recuperador, abrir_indice
 from src.schemas import (
@@ -124,6 +128,12 @@ class Conversacion(TypedDict):
     # mensaje que sí avance o que el clasificador reconozca.
     sin_entender: NotRequired[int]
 
+    # Cuando la conversación pasa al negocio: en qué paso estaba y desde cuándo
+    # está esperando. Sin el paso previo, volver del modo humano tiraría a la
+    # persona al principio y le haría repetir todo.
+    estado_previo: NotRequired[str | None]
+    humano_desde: NotRequired[str | None]
+
     # Resultado del paso `entender`, para que `avanzar` lo lea
     intent: NotRequired[str]
     entidades: NotRequired[dict]
@@ -154,11 +164,15 @@ async def entender(conv: Conversacion, config) -> dict:
     # de confirmación se repetiría en el mensaje siguiente.
     limpio_turno = {"_plantilla": None, "_datos": None}
 
+    # Por número o por nombre: las dos cosas valen. La lista está en pantalla,
+    # así que "2" y "Matias Calo" señalan lo mismo y ninguno necesita al modelo.
     indice = numero_elegido(texto, len(opciones))
+    como = "número"
+    if indice is None:
+        indice = opcion_por_nombre(texto, opciones)
+        como = "nombre"
     if indice is not None:
-        # La persona eligió de la lista. No hace falta el modelo: sabemos qué
-        # mostramos y en qué orden.
-        logger.info("número %d → %s (sin LLM)", indice + 1, opciones[indice])
+        logger.info("%s «%s» → %s (sin LLM)", como, texto[:24], opciones[indice])
         return {
             **limpio_turno,
             "intent": (AVANZA_CON.get(estado) or Intencion.DESCONOCIDO).value,
@@ -217,6 +231,27 @@ async def avanzar(conv: Conversacion, config) -> dict:
 
     saltear = await _pasos_a_saltear(negocio, cfg)
 
+    # ---- La conversación es del negocio: el bot no interrumpe ----
+    #
+    # Va ANTES que todo lo demás. Si alguien está esperando que le conteste una
+    # persona y el bot le sigue mandando listas de horarios, la escalación no
+    # sirvió de nada: quedan dos hablando encima.
+    if estado == Estado.EN_MANOS_HUMANAS:
+        if intent == Intencion.VOLVER_AL_BOT or _espera_vencida(conv):
+            return {"estado": conv.get("estado_previo") or Estado.APERTURA.value,
+                    "estado_previo": None, "humano_desde": None,
+                    "_plantilla": "volvio_el_bot"}
+        # Silencio. El mensaje igual queda guardado en el hilo para quien
+        # atienda, pero el bot no contesta.
+        logger.info("en manos del negocio: no contesto «%s»", conv["mensaje"][:40])
+        return {"_plantilla": "silencio"}
+
+    if intent == Intencion.HABLAR_CON_PERSONA:
+        return await _escalar(conv, cfg, negocio, estado, "pedido")
+
+    if intent == Intencion.PEDIR_LINK:
+        return {"_plantilla": "link"}
+
     # Turno ya cerrado: el mensaje siguiente empieza un pedido nuevo. Se limpia
     # lo elegido pero NO quién es la persona — formulario nuevo, cliente
     # conocido. Es lo que espera alguien que vuelve a escribir después de
@@ -251,15 +286,10 @@ async def avanzar(conv: Conversacion, config) -> dict:
             return {"desde_horario": int(conv.get("desde_horario") or 0) + PAGINA}
         return {}
 
-    if intent == Intencion.HABLAR_CON_PERSONA:
-        # No mueve el flujo ni borra nada: se contesta y la conversación queda
-        # exactamente donde estaba.
-        return {"_plantilla": "persona", "sin_entender": 0}
-
     if intent in (Intencion.DESCONOCIDO, Intencion.SALUDO):
         # Un saludo a mitad de flujo no reinicia nada: repite el pedido actual.
         if estado == Estado.APERTURA:
-            return _abrir(saltear)
+            return await _abrir(saltear, negocio)
         if intent == Intencion.SALUDO:
             return {"sin_entender": 0}
 
@@ -268,15 +298,26 @@ async def avanzar(conv: Conversacion, config) -> dict:
         # ofrece una persona, sin que haga falta que se le ocurra pedirlo — que
         # es justo lo que no se le ocurre a alguien que ya se está frustrando.
         fallas = int(conv.get("sin_entender") or 0) + 1
-        if fallas >= LIMITE_SIN_ENTENDER:
-            return {"sin_entender": 0, "_plantilla": "persona"}
-        return {"sin_entender": fallas}
+        # Escalar por confusión SOLO si la conversación venía avanzando.
+        #
+        # Sin esta condición, "!!!!" y tres emojis alcanzaban para hacerle
+        # sonar el teléfono al dueño: dos mensajes de basura desde un número
+        # cualquiera y sale la notificación. Un canal de aviso que cualquiera
+        # puede disparar gratis se ignora en una semana, y ahí el que se
+        # trabó de verdad tampoco recibe ayuda.
+        #
+        # Quien eligió algo y después se trabó merece una persona. Quien
+        # nunca eligió nada y manda ruido recibe el pedido de nuevo.
+        if fallas >= LIMITE_SIN_ENTENDER and _hubo_avance(conv):
+            return {**await _escalar(conv, cfg, negocio, estado, "trabado"),
+                    "sin_entender": 0}
+        return {"sin_entender": 0 if fallas > LIMITE_SIN_ENTENDER else fallas}
 
     # Primer contacto: SIEMPRE la apertura, sin importar qué haya escrito.
     # Es el requisito de que la puerta de entrada sea siempre la misma; el
     # dato que trajo no se pierde, se interpreta en el mensaje siguiente.
     if estado == Estado.APERTURA:
-        return _abrir(saltear)
+        return await _abrir(saltear, negocio)
 
     # ---- ¿Quiere volver a un paso anterior? ----
     paso = PASO_DE.get(intent)
@@ -311,15 +352,24 @@ async def avanzar(conv: Conversacion, config) -> dict:
     return cambios
 
 
-def _abrir(saltear: set[Estado]) -> dict:
+async def _abrir(saltear: set[Estado], negocio: str) -> dict:
     """Muestra la apertura y deja el flujo listo para el próximo mensaje.
 
     El estado avanza a ESPERANDO_SERVICIO pero la plantilla que sale es la de
     apertura: sin esta marca, `responder` elegiría la plantilla del estado
     nuevo y el saludo con el nombre del negocio no se mostraría nunca.
+
+    Si el negocio vende un solo servicio, ese paso se saltea Y el servicio
+    queda elegido acá. Saltear el paso sin elegirlo dejaría `servicio_id` en
+    None y la reserva se caería al final, cuando ya no hay nada que preguntar.
     """
-    return {"estado": siguiente(Estado.APERTURA, saltear).value,
-            "_plantilla": "apertura"}
+    cambios = {"estado": siguiente(Estado.APERTURA, saltear).value,
+               "_plantilla": "apertura"}
+    if Estado.ESPERANDO_SERVICIO in saltear:
+        servicios = await _aturno.listar_servicios(negocio)
+        if servicios:
+            cambios["servicio_id"] = servicios[0].id
+    return cambios
 
 
 def _limpiar_desde(paso: Estado) -> dict:
@@ -336,9 +386,69 @@ def _limpiar_desde(paso: Estado) -> dict:
     return {c: None for c in campos} | {"desde_horario": 0}
 
 
+def _hubo_avance(conv: Conversacion) -> bool:
+    """¿La persona llegó a elegir algo, o viene mandando ruido desde el arranque?"""
+    return any(conv.get(k) for k in ("servicio_id", "profesional_id",
+                                     "fecha", "hora", "nombre"))
+
+
+def _espera_vencida(conv: Conversacion) -> bool:
+    """¿Pasó demasiado tiempo sin que nadie del negocio conteste?
+
+    Un bot que se calla para siempre es peor que uno que molesta: la persona no
+    sabe si la están leyendo. Pasado el rato, el bot retoma y al menos se puede
+    sacar el turno sola.
+    """
+    desde = conv.get("humano_desde")
+    if not desde:
+        return True
+    try:
+        return (ahora() - datetime.fromisoformat(desde)).total_seconds() > \
+            config().escalacion_minutos * 60
+    except ValueError:
+        return True
+
+
+async def _escalar(conv: Conversacion, cfg: dict, negocio: str,
+                   estado: Estado, motivo: str) -> dict:
+    """Le avisa al negocio y pone la conversación en sus manos.
+
+    El estado NO se limpia: cuando la persona vuelva —o cuando el bot retome—
+    sigue exactamente donde estaba. Es la misma regla que el botón atrás.
+    """
+    aviso = Escalacion(
+        business_id=negocio,
+        telefono=cfg.get("telefono") or "",
+        nombre=conv.get("nombre") or cfg.get("nombre_cliente"),
+        motivo=motivo,
+        paso=estado.value,
+        ultimo_mensaje=conv.get("mensaje") or "",
+    )
+    llego = await notificar(aviso, config().escalacion_webhook or None)
+    return {
+        "estado": Estado.EN_MANOS_HUMANAS.value,
+        "estado_previo": estado.value,
+        "humano_desde": ahora().isoformat(),
+        "_plantilla": "escalado",
+        "_datos": {"aviso_llego": llego},
+    }
+
+
 async def _pasos_a_saltear(negocio: str, cfg: dict) -> set[Estado]:
-    """Staff si no hay equipo; nombre si el teléfono ya es de un cliente."""
+    """Los pasos que en este negocio no son una decisión.
+
+    Un paso con una sola opción no es una pregunta: es un trámite. Pedirle a
+    alguien que elija "1" de una lista de uno agrega un mensaje, una espera y
+    una oportunidad de equivocarse, y no cambia el resultado — ya estaba
+    decidido antes de preguntar.
+
+    Se saltea el servicio si el negocio vende uno solo, el profesional si
+    atiende una sola persona, y el nombre si el teléfono ya es de un cliente
+    conocido. Los tres son el mismo criterio.
+    """
     saltear = set()
+    if len(await _aturno.listar_servicios(negocio)) <= 1:
+        saltear.add(Estado.ESPERANDO_SERVICIO)
     if len(await _aturno.listar_personal(negocio)) <= 1:
         saltear.add(Estado.ESPERANDO_STAFF)
     if cfg.get("nombre_cliente"):
@@ -495,8 +605,17 @@ async def responder(conv: Conversacion, config) -> dict:
 
     if especial == "apertura":
         servicios = await _aturno.listar_servicios(negocio)
-        return {"respuesta": P.apertura(nombre_negocio, servicios, cfg.get("nombre_cliente")),
-                "opciones": [s.nombre for s in servicios]}
+        cabecera = P.apertura(nombre_negocio, servicios, cfg.get("nombre_cliente"))
+        if estado == Estado.ESPERANDO_SERVICIO:
+            return {"respuesta": cabecera, "opciones": [s.nombre for s in servicios]}
+
+        # El negocio vende un solo servicio, así que ese paso no existe y el
+        # estado ya avanzó. El saludo se pega con el pedido del paso REAL, en
+        # un mismo mensaje: si saliera solo, las opciones guardadas serían las
+        # de servicios y el "1" del mensaje siguiente apuntaría a otra lista.
+        paso = await _pedir_paso(conv, cfg, negocio, nombre_negocio, servicios)
+        return {"respuesta": f"{cabecera}\n\n{paso['respuesta']}",
+                "opciones": paso.get("opciones", [])}
 
     if especial == "info":
         # Sin texto, el negocio no cargó esa respuesta. Se dice eso y no
@@ -504,6 +623,31 @@ async def responder(conv: Conversacion, config) -> dict:
         # pregunta como el problema.
         texto = datos.get("texto") or ""
         return {"respuesta": P.respuesta_info(texto) if texto else P.sin_dato()}
+
+    if especial == "silencio":
+        # Cadena vacía: el webhook no manda nada. La persona ve el chat como lo
+        # dejó, esperando a que le conteste alguien del negocio.
+        return {"respuesta": ""}
+
+    if especial == "escalado":
+        try:
+            datos_contacto = await _aturno.contacto(negocio)
+        except Exception:  # noqa: BLE001
+            datos_contacto = None
+        return {"respuesta": P.escalado(
+            nombre_negocio, bool(datos.get("aviso_llego")), datos_contacto),
+            "opciones": []}
+
+    if especial == "volvio_el_bot":
+        paso = await _pedir_paso(conv, cfg, negocio, nombre_negocio,
+                                 await _aturno.listar_servicios(negocio))
+        return {"respuesta": P.volvio_el_bot(paso["respuesta"]),
+                "opciones": paso.get("opciones", [])}
+
+    if especial == "link":
+        base = (config().aturno_web_url or "").rstrip("/")
+        url = f"{base}/{negocio}" if base else None
+        return {"respuesta": P.link_web(nombre_negocio, url)}
 
     if especial == "persona":
         # Si aturno no contesta, igual hay que responder algo: el pedido de
@@ -532,6 +676,18 @@ async def responder(conv: Conversacion, config) -> dict:
                 "opciones": [a["hora"] for a in datos.get("alternativas", [])]}
 
     servicios = await _aturno.listar_servicios(negocio)
+    return await _pedir_paso(conv, cfg, negocio, nombre_negocio, servicios)
+
+
+async def _pedir_paso(conv: Conversacion, cfg: dict, negocio: str,
+                      nombre_negocio: str, servicios: list) -> dict:
+    """El texto que pide lo que falta en el paso actual, y sus opciones.
+
+    Separado de `responder` porque la apertura también lo necesita: cuando el
+    negocio vende un solo servicio, el saludo y el pedido del paso siguiente
+    salen juntos en un mismo mensaje.
+    """
+    estado = Estado(conv.get("estado") or Estado.APERTURA.value)
 
     if estado == Estado.APERTURA:
         return {"respuesta": P.apertura(nombre_negocio, servicios, cfg.get("nombre_cliente")),
@@ -543,7 +699,10 @@ async def responder(conv: Conversacion, config) -> dict:
 
     if estado == Estado.ESPERANDO_STAFF:
         gente = await _aturno.listar_personal(negocio, conv.get("servicio_id"))
-        nombre_svc = next(s.nombre for s in servicios if s.id == conv["servicio_id"])
+        # Con un solo servicio no se hace eco del nombre: ya se dijo en el
+        # saludo, dos renglones más arriba y en el mismo mensaje.
+        nombre_svc = (next((s.nombre for s in servicios if s.id == conv.get("servicio_id")), None)
+                      if len(servicios) > 1 else None)
         return {"respuesta": P.lista_staff(gente, nombre_svc),
                 "opciones": [p.nombre for p in gente] + ["Me da igual"]}
 
