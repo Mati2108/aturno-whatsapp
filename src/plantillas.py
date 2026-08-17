@@ -66,34 +66,61 @@ def apertura(negocio: str, servicios: list[Servicio], nombre: str | None = None)
     Un solo CTA al final: si le das dos, la gente no contesta ninguno.
     """
     saludo = f"Hola {nombre}!" if nombre else "Hola!"
-    lineas = [f"{saludo} Soy el asistente de {negocio}.", ""]
+
+    # Un renglón en blanco entre bloques, siempre.
+    #
+    # Sin eso, WhatsApp junta las frases en un párrafo corrido y el mensaje se
+    # lee como una pared: en la pantalla de un celular, dos oraciones seguidas
+    # sin aire son una sola cosa larga que nadie termina de leer. Cada bloque
+    # de acá es una idea distinta —quién soy, qué hacemos, qué podés hacer vos,
+    # y la salida— y por eso van separados.
+    bloques = [f"{saludo} Soy el asistente de {negocio}."]
+
+    # Sin servicios NO se anuncia un menú. Pasó en producción: el bot decía
+    # "Esto es lo que hacemos:" y abajo no había nada, porque estaba leyendo un
+    # negocio que no conocía. Anunciar una lista y no mostrarla es peor que no
+    # anunciarla — la persona se queda esperando el resto del mensaje.
+    #
+    # Le puede pasar a cualquier negocio que todavía no cargó sus servicios, así
+    # que no alcanza con arreglar la configuración: la plantilla tiene que
+    # aguantar el caso.
+    if not servicios:
+        bloques.append(
+            "Ahora mismo no puedo mostrarte los servicios. "
+            "Si me decís qué necesitás, le aviso a alguien del local para que "
+            "te responda."
+        )
+        return "\n\n".join(bloques)
 
     if len(servicios) == 1:
+        # El precio y la duración en su propio renglón, debajo del nombre. Un
+        # servicio con guiones en el medio se lee como una fórmula.
         s = servicios[0]
-        lineas.append(f"Sacamos turnos para {s.nombre} — "
-                      f"{s.duracion_minutos} min — {_plata(s.precio)}.")
+        bloques.append(f"Sacamos turnos para {s.nombre}.\n"
+                       f"{s.duracion_minutos} min · {_plata(s.precio)}")
     else:
-        lineas.append("Esto es lo que hacemos:")
+        lista = ["Esto es lo que hacemos:", ""]
         for i, s in enumerate(servicios, 1):
-            lineas.append(f"{i}. {s.nombre} — {s.duracion_minutos} min — "
-                          f"{_plata(s.precio)}")
+            lista.append(f"{i}. {s.nombre}")
+            lista.append(f"   {s.duracion_minutos} min · {_plata(s.precio)}")
+        bloques.append("\n".join(lista))
 
     # La pregunta es abierta a propósito. Este es el único momento de la
     # conversación donde no hay una lista que responder, y por eso es por donde
     # entra todo lo que no es reservar: precios, dónde quedan, si hay lugar
     # mañana. Un "elegí una opción" acá manda a la gente a contestar un número
     # al azar para poder seguir, y después preguntar lo que quería preguntar.
-    lineas += ["", "¿Querés sacar un turno o tenés alguna pregunta? "
-                   "Escribime lo que necesites."]
+    bloques.append("¿Querés sacar un turno o tenés alguna pregunta?\n"
+                   "Escribime lo que necesites.")
 
-    # La salida a una persona va nombrada, pero al final y en un renglón: si
-    # está escondida no sirve de nada, y si compite con la pregunta de arriba
-    # la mitad la elige sin haber probado. Lo que la inclina es el argumento,
-    # no esconderla — por acá se resuelve ahora, con una persona hay que
-    # esperar a que esté libre.
-    lineas.append("Si preferís hablar con alguien del local, pedímelo y le "
-                  "aviso. Por acá suele salir en un minuto.")
-    return "\n".join(lineas)
+    # La salida a una persona va nombrada, pero última y en su propio bloque:
+    # si está escondida no sirve de nada, y si compite con la pregunta de
+    # arriba la mitad la elige sin haber probado. Lo que la inclina es el
+    # argumento, no esconderla.
+    bloques.append("Si preferís hablar con alguien del local, pedímelo y le "
+                   "aviso. Por acá suele ser más rápido.")
+
+    return "\n\n".join(bloques)
 
 
 # ══════════════════════════════════════════════════════════════════

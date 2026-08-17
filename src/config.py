@@ -112,7 +112,10 @@ TENANTS: dict[str, Tenant] = {
     "+14155238886": Tenant(
         business_id="aturno",
         slug="aturno",
-        nombre="matimatigoals",
+        # Solo el respaldo: el nombre real sale de aturno en cada mensaje
+        # (`ClienteAturno.nombre_visible`). Este valor se usa únicamente
+        # si el backend no contesta.
+        nombre="Aturno",
         numero_whatsapp="+14155238886",
     ),
 }
