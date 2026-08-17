@@ -297,6 +297,12 @@ class Salud(BaseModel):
     proveedor_llm: str = Field(description="Proveedor de LLM configurado.")
     embeddings: str = Field(description="Modelo de embeddings en uso.")
     aturno_modo: str = Field(description="'doble' en memoria o 'api' real.")
+    numero: str = Field(default="", description="El número al que le escriben.")
+    sandbox: bool = Field(
+        default=False,
+        description="Si es el número compartido de prueba de Twilio, que obliga "
+                    "a mandar 'join <código>' antes de poder escribirle.",
+    )
     firma_validada: bool = Field(description="Si se verifica la firma de Twilio.")
     trazado: bool = Field(description="Si las trazas van a Phoenix.")
 
@@ -370,6 +376,12 @@ async def salud() -> Salud:
         proveedor_llm=cfg.provider,
         embeddings=modelo_en_uso().split("/")[-1],
         aturno_modo=cfg.aturno_modo,
+        numero=cfg.twilio_whatsapp_number,
+        # El sandbox de Twilio es siempre este número, compartido por todos.
+        # Importa decirlo: con él, nadie puede escribirle al bot sin mandar
+        # antes el "join", y un negocio que no lo sabe reparte un número que
+        # a sus clientes no les va a contestar.
+        sandbox=cfg.twilio_whatsapp_number == "+14155238886",
         firma_validada=cfg.validar_firma,
         trazado=trazado_activo(),
     )
