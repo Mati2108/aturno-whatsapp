@@ -400,6 +400,44 @@ async def responder_desde_el_panel(
     return Enviado(enviado=True, detalle="ok", momento=ahora().isoformat())
 
 
+@app.post("/panel/devolver", response_model=Enviado)
+async def devolver_al_bot(
+    mensaje: MensajeDelPanel,
+    x_panel_secret: str = Header(default=""),
+) -> Enviado:
+    """El negocio le devuelve la conversación al asistente.
+
+    `texto` no se usa: el mensaje lo arma el flujo, porque tiene que incluir el
+    pedido del paso en el que había quedado. Se acepta igual para que el panel
+    pueda usar el mismo cuerpo en los dos endpoints.
+    """
+    if not _secreto_valido(x_panel_secret):
+        raise HTTPException(status_code=404, detail="No encontrado")
+
+    negocio = next((t for t in TENANTS.values()
+                    if t.business_id == mensaje.business_id), None)
+    if negocio is None or _grafo is None:
+        raise HTTPException(status_code=400, detail="Ese negocio no atiende por acá")
+
+    texto = await flujo.retomar(_grafo, {"configurable": {
+        "thread_id": hilo_de(negocio.business_id, mensaje.telefono),
+        "business_id": negocio.business_id,
+        "nombre_negocio": negocio.nombre,
+        "telefono": mensaje.telefono,
+        "nombre_cliente": None,
+        "calendario": calendario(),
+    }})
+    if texto is None:
+        # Ya la tenía el bot. No es un error: es apretar dos veces el botón.
+        return Enviado(enviado=False, detalle="ya la tenía el asistente",
+                       momento=ahora().isoformat())
+
+    _enviar(mensaje.telefono, negocio, texto)
+    await avisar_a_aturno(evento(mensaje.business_id, mensaje.telefono, texto,
+                                 de_quien="bot"))
+    return Enviado(enviado=True, detalle="ok", momento=ahora().isoformat())
+
+
 async def _pasar_a_manos_humanas(business_id: str, telefono: str) -> None:
     """Marca la conversación como atendida por una persona, sin perder nada.
 

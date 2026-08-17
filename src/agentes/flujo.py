@@ -750,6 +750,43 @@ async def _pedir_paso(conv: Conversacion, cfg: dict, negocio: str,
     return {"respuesta": P.error_tecnico(), "opciones": []}
 
 
+async def retomar(grafo, config_del_hilo: dict) -> str | None:
+    """Le devuelve la conversación al bot. Devuelve qué mandarle a la persona.
+
+    La escribe el negocio desde su panel, no el cliente. Por eso no se hace
+    pasar un mensaje por el grafo: el flujo avanzaría un paso, y quien apretó
+    el botón no dijo nada en nombre del cliente.
+
+    Devuelve None si la conversación no estaba en manos de nadie — apretar dos
+    veces el botón no puede mandar dos mensajes.
+
+    Lo que se manda incluye el pedido del paso actual. Alguien que venía
+    hablando con una persona y de golpe recibe "sigo yo" sin más queda sin
+    saber qué contestar: hay que recordarle en qué estaban.
+    """
+    estado_actual = await grafo.aget_state(config_del_hilo)
+    vals = estado_actual.values or {}
+    if vals.get("estado") != Estado.EN_MANOS_HUMANAS.value:
+        return None
+
+    previo = vals.get("estado_previo") or Estado.APERTURA.value
+    await grafo.aupdate_state(config_del_hilo, {
+        "estado": previo, "estado_previo": None, "humano_desde": None,
+    })
+
+    conv = {**vals, "estado": previo}
+    cfg = config_del_hilo.get("configurable") or {}
+    negocio = cfg["business_id"]
+    servicios = await _aturno.listar_servicios(negocio)
+    paso = await _pedir_paso(conv, cfg, negocio,
+                            cfg.get("nombre_negocio") or "el negocio", servicios)
+    # Las opciones que se muestran tienen que quedar guardadas, o el número
+    # que conteste la persona se resuelve contra la lista anterior.
+    await grafo.aupdate_state(config_del_hilo,
+                              {"opciones": paso.get("opciones", [])})
+    return P.volvio_el_bot(paso["respuesta"])
+
+
 # ══════════════════════════════════════════════════════════════════
 # El grafo
 # ══════════════════════════════════════════════════════════════════
