@@ -116,6 +116,80 @@ def _twilio() -> Client:
 
 
 # ---------- Salud ----------
+class EstadoCredencial(BaseModel):
+    """Si una credencial sirve, sin revelar su valor."""
+
+    valida: bool
+    detalle: str = Field(description="Qué está mal, si algo lo está.")
+    largo: int = Field(description="Cuántos caracteres tiene lo cargado.")
+    empieza: str = Field(description="Primeros caracteres, para identificarla.")
+
+
+async def _verificar_credenciales() -> dict[str, EstadoCredencial]:
+    """Prueba cada credencial contra su proveedor y reporta cuál falla.
+
+    Existe porque diagnosticar esto a ciegas costó tres despliegues. Los
+    errores que devuelven los proveedores no dicen qué variable está mal:
+    Twilio contesta "invalid username" cuando el Account SID está mal, y
+    "invalid" no ayuda a saber si el valor se pegó cortado, cruzado con otro
+    o con un espacio al final.
+
+    Nunca devuelve el valor: solo el largo y el prefijo, que alcanzan para
+    compararlo con el original sin exponerlo en una URL pública.
+    """
+    cfg = config()
+    r: dict[str, EstadoCredencial] = {}
+
+    def marca(valor: str) -> dict:
+        return {"largo": len(valor), "empieza": valor[:7] + "…" if valor else "(vacía)"}
+
+    # Anthropic
+    v = cfg.anthropic_api_key
+    try:
+        import anthropic
+        await anthropic.AsyncAnthropic(api_key=v).messages.create(
+            model=cfg.anthropic_modelo, max_tokens=1,
+            messages=[{"role": "user", "content": "."}])
+        r["anthropic"] = EstadoCredencial(valida=True, detalle="ok", **marca(v))
+    except Exception as e:
+        pista = "clave inválida o incompleta" if "401" in str(e) else str(e)[:70]
+        r["anthropic"] = EstadoCredencial(valida=False, detalle=pista, **marca(v))
+
+    # Twilio
+    sid, tok = cfg.twilio_account_sid, cfg.twilio_auth_token
+    try:
+        from twilio.rest import Client
+        Client(sid, tok).api.accounts(sid).fetch()
+        r["twilio"] = EstadoCredencial(valida=True, detalle="ok", **marca(sid))
+    except Exception as e:
+        s = str(e)
+        if not sid.startswith("AC"):
+            pista = "el SID no empieza con AC — ¿está cruzado con el auth token?"
+        elif "username" in s:
+            pista = "el Account SID no es válido"
+        elif "401" in s:
+            pista = "el auth token no es válido"
+        else:
+            pista = s[:70]
+        r["twilio"] = EstadoCredencial(valida=False, detalle=pista, **marca(sid))
+
+    # Gemini (embeddings)
+    try:
+        from src.rag.indice import _embeddings
+        _embeddings().embed_query("ok")
+        r["gemini"] = EstadoCredencial(valida=True, detalle="ok", **marca(cfg.gemini_api_key))
+    except Exception as e:
+        r["gemini"] = EstadoCredencial(valida=False, detalle=str(e)[:70],
+                                       **marca(cfg.gemini_api_key))
+    return r
+
+
+@app.get("/diagnostico", response_model=dict[str, EstadoCredencial])
+async def diagnostico() -> dict[str, EstadoCredencial]:
+    """Cuál credencial está mal cargada, sin exponer ninguna."""
+    return await _verificar_credenciales()
+
+
 class Salud(BaseModel):
     """La respuesta de /salud, tipada.
 
