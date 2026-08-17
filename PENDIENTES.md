@@ -64,25 +64,33 @@ cuenta. Sin service account, sin token de admin, sin clave de Firebase.
 
 Se activa con `ATURNO_MODO=api` + `ATURNO_API_URL`.
 
-**Lo verificado contra el negocio real `aturno`:** lee bien servicios
-(Dentista), staff (Juan Demo, Matias Calo) y el horario del negocio, incluido
-que los viernes está cerrado. **Lo que falta:** crear un turno, bloqueado por
-lo de abajo.
+**VERIFICADO el 17/8/2026 contra el negocio real `aturno`.** El bot sacó un
+turno de punta a punta y quedó en la agenda: `u4qCrmfVfE0fsnt7IYjO`, Dentista,
+2026-08-17 14:00, código `CYWJ-66BS`.
 
-#### El backend desplegado está atrasado
+Lee el negocio de verdad, no datos inventados: los dos tramos del horario
+(`09:00–15:30` y `16:00–22:30`) se ven como un hueco entre las 15:00 y las
+16:00, porque un turno de 30 minutos no entra antes del corte. Los viernes
+salen cerrados. Las 04:00 dan `FUERA_DE_HORARIO` y no "ocupado".
 
-`aturno-backend` en Render sirve un commit anterior al **59a0315 (6/8/2026)**.
-Comprobado: responde a `check-availability`, que no existe en `main`, y no
-responde a `/ocupacion` ni a `/horarios-ocupados`, que sí están en
-`limpieza-estructura`. O sea que Render ya sigue la rama correcta y quedó
-clavado en un commit viejo. **No hay que mergear nada**: alcanza con
-"Manual Deploy → Deploy latest commit".
+Falta todavía un `datos/aturno.md` para el RAG: los archivos de conocimiento se
+llaman como el `business_id`, que ahora es el slug de aturno. Sin eso, las
+preguntas de información contestan vacío.
 
-Mientras tanto, el deploy viejo tiene la versión rota de `check-availability`
-—la que arrancaba `available` en `false` y contestaba "no disponible" para
-todos los horarios de todos los servicios, según el comentario del propio
-código—. Nadie lo había notado porque el frontend no llama a ese endpoint: este
-bot es su primer consumidor real.
+#### Lo que hubo que destrabar para llegar acá
+
+`aturno-backend` en Render desplegaba la rama **`master`** (14/8/2025) mientras
+el frontend desplegaba **`limpieza-estructura`** (6/8/2026): front y fondo
+desalineados por un año. Se resolvió apuntando el backend a la misma rama.
+
+**Nada en el proyecto decía qué rama despliega cada servicio.** Ese es el
+origen real del problema, y por eso está escrito acá.
+
+El `master` desplegado tenía la versión vieja de `check-availability`, la que
+arrancaba `available` en `false` y contestaba "no disponible" para todos los
+horarios de todos los servicios — el comentario del propio código lo dice. No
+se había notado nunca porque el frontend no llama a ese endpoint: este bot es
+su primer consumidor real.
 
 Dos cosas más que salieron de ahí:
 
@@ -95,6 +103,26 @@ Dos cosas más que salieron de ahí:
 El adaptador funciona igual contra un backend viejo: si falta
 `/horarios-ocupados`, pregunta horario por horario con `check-availability`
 (concurrencia limitada a 6).
+
+#### Bug encontrado EN ATURNO, todavía sin arreglar
+
+Los tres endpoints públicos con los que un cliente gestiona su turno arman la
+fecha sin offset horario:
+
+```js
+new Date(`${booking.date}T${booking.time}:00`)   // server.js:4604, 4659, 4813
+```
+
+Node lo interpreta en la zona del servidor, que en Render es UTC. Un turno de
+las 14:00 se lee como 14:00 UTC —las 11 de Argentina— y se compara contra el
+ahora en UTC. Resultado: **en producción nadie puede consultar, cancelar ni
+reprogramar un turno del mismo día**; el sistema le dice que ya pasó.
+
+Es el mismo bug que ya está arreglado en `recordatorios.js`, donde la fecha se
+arma con `-03:00` explícito (`server.js:6807` hace lo mismo). Falta aplicarlo
+en esas tres líneas.
+
+Toca el repo de aturno, no éste.
 
     python probar_aturno_real.py <slug>              # solo lee
     python probar_aturno_real.py <slug> --reservar   # crea un turno real
