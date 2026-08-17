@@ -13,9 +13,35 @@ escribe "el finde".
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+
+# El huso del negocio, no el del servidor.
+#
+# El contenedor corre en UTC. `date.today()` ahí devuelve el día siguiente a
+# partir de las 21:00 de Argentina, y `datetime.now()` adelanta tres horas.
+# Las dos cosas rompen algo distinto y ninguna se nota probando de día:
+#
+#   - "hoy" pasa a ser mañana → el calendario que ve el clasificador arranca
+#     un día corrido, y "mañana" resuelve a pasado mañana.
+#   - la hora adelantada → a las 18:00 de Argentina el sistema cree que son
+#     las 21:00 y esconde toda la tarde como si ya hubiera pasado.
+#
+# Por eso NINGÚN archivo de este proyecto llama a `date.today()` ni a
+# `datetime.now()` directamente: todos pasan por acá.
+TZ = ZoneInfo("America/Argentina/Buenos_Aires")
+
+
+def ahora() -> datetime:
+    """El momento actual en la zona del negocio, con huso."""
+    return datetime.now(TZ)
+
+
+def hoy() -> date:
+    """Qué día es para el negocio, que no siempre es el del servidor."""
+    return ahora().date()
 
 
 def calendario(desde: date | None = None, dias: int = 10) -> str:
@@ -24,7 +50,7 @@ def calendario(desde: date | None = None, dias: int = 10) -> str:
     El modelo no calcula: busca en esta tabla. Convertir "el jueves" a una
     fecha pasa de ser un cálculo a ser una consulta.
     """
-    desde = desde or date.today()
+    desde = desde or hoy()
     filas = []
     for i in range(dias):
         d = desde + timedelta(days=i)

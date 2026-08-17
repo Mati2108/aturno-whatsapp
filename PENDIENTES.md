@@ -56,16 +56,26 @@ explicación del proyecto.
 
 ## 🟡 Deuda que conviene saldar
 
-### 4. Habla con un doble, no con aturno
+### 4. La integración con aturno está escrita pero sin probar contra un negocio real
 
-`AturnoDoble` guarda los turnos en memoria. Funciona y está testeado, pero un
-turno sacado por WhatsApp **no aparece en la agenda real del negocio**.
-
-El contrato ya está definido (`src/aturno/base.py`) y la implementación contra
-la API real es la pieza que falta. Los endpoints que hacen falta son públicos
-en aturno: `POST /api/bookings/check-availability` y `POST /api/bookings`.
+`src/aturno/api.py` implementa el contrato contra el backend real, usando solo
+endpoints públicos — los mismos que usa la página de reservas para alguien sin
+cuenta. Sin service account, sin token de admin, sin clave de Firebase.
 
 Se activa con `ATURNO_MODO=api` + `ATURNO_API_URL`.
+
+**Lo verificado hasta ahora:** que importa, la intersección de horarios y que
+los tests del flujo siguen pasando. **Lo que falta:** correrlo contra un
+negocio de verdad. Hasta que eso pase, esto no está probado.
+
+    python probar_aturno_real.py <slug>              # solo lee
+    python probar_aturno_real.py <slug> --reservar   # crea un turno real
+
+El negocio tiene que tener servicios y horarios cargados. Si el staff no tiene
+horario propio, aturno lo trata como que no atiende — y el bot hace lo mismo.
+
+Falta también un `datos/<slug>.md` para el RAG: los archivos de conocimiento se
+llaman como el `business_id`, que ahora es el slug de aturno.
 
 ### 5. Un solo número de WhatsApp
 
@@ -131,8 +141,6 @@ Salieron de usarlo, no de imaginarlo.
   medias.
 - **No maneja señas.** Los servicios con depósito previo (coloración pide 30%)
   se reservan sin cobrarlo.
-- **"Ver más horarios"** está en la plantilla pero la intención `VER_MAS` no
-  está cableada: si alguien pide "más", cae en desconocido.
 - **La sesión no vence.** Si alguien deja una conversación a medias y vuelve a
   la semana, sigue en el mismo paso. Debería reiniciarse a los 30 minutos.
 - **El RAG no cita la fuente.** Contesta con el fragmento pero no dice de qué
@@ -140,6 +148,27 @@ Salieron de usarlo, no de imaginarlo.
   está usando.
 - **Sin límite de tasa por teléfono.** Nada impide que alguien mande cien
   mensajes y gaste el saldo de la API.
+
+---
+
+---
+
+## ✅ Arreglado, anotado para que no vuelva
+
+Los tres salieron de usar el bot desde la terminal (`chatear.py`), no de leer
+el código. Ninguno lo habrían encontrado los tests: los tres pasaban.
+
+| Qué pasaba | Por qué |
+|---|---|
+| A las 12:55 ofrecía las 09:00 **de hoy**, y las aceptaba | El doble filtraba días pasados pero no horas pasadas |
+| Después de pedir "más", la pantalla decía 17:00 y el "1" guardaba las 13:00 | El número se resolvía contra la lista completa y no contra la mostrada |
+| "más" caía en "no entendí" | La plantilla lo ofrecía y la intención no estaba cableada |
+
+Y la causa de fondo del primero: **todo el proyecto usaba `date.today()` sin
+huso**. El contenedor corre en UTC, así que desde las 21:00 de Argentina el bot
+creía que era mañana y adelantaba tres horas. Ahora hay un solo lugar que
+resuelve el tiempo (`src/fechas.py`: `hoy()` y `ahora()`) y nadie más llama a
+`date.today()`.
 
 ---
 

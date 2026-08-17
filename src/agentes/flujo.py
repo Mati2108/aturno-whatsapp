@@ -46,12 +46,18 @@ from src.agentes.estados import (
     siguiente,
 )
 from src.aturno.base import ClienteAturno
+from src.fechas import hoy as hoy_del_negocio
 from src.rag.indice import Recuperador, abrir_indice
 from src.schemas import Alternativa, DatosDelCliente, MotivoNoDisponible
 
 logger = logging.getLogger("pipeline.flujo")
 
 DIAS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+
+# Cuántos horarios entran en un mensaje. Veinte horarios en un celular obligan
+# a hacer scroll para elegir, y elegir es justo lo que la persona vino a hacer.
+# El resto se pide con "más" (Intencion.VER_MAS).
+PAGINA = 8
 
 _aturno: ClienteAturno | None = None
 _recuperadores: dict[str, Recuperador] = {}
@@ -87,6 +93,12 @@ class Conversacion(TypedDict):
     # Las opciones que se mostraron en el último mensaje. Sin esto no se puede
     # resolver "3": hay que saber contra qué lista.
     opciones: NotRequired[list[str]]
+
+    # Desde qué horario arranca la lista que se está mostrando. Avanza cuando
+    # la persona pide "más" y vuelve a cero al cambiar de día — si no, elegir
+    # otro día heredaría el desplazamiento del anterior y la lista empezaría
+    # por el medio sin razón visible.
+    desde_horario: NotRequired[int]
 
     # Resultado del paso `entender`, para que `avanzar` lo lea
     intent: NotRequired[str]
@@ -130,7 +142,7 @@ async def entender(conv: Conversacion, config) -> dict:
         }
 
     cfg = (config.get("configurable") or {})
-    hoy = date.today()
+    hoy = hoy_del_negocio()
     resultado: Clasificacion = await clasificar(
         _clasificador, texto, estado, opciones,
         hoy.isoformat(), DIAS_ES[hoy.weekday()], cfg.get("calendario", ""),
@@ -193,6 +205,15 @@ async def avanzar(conv: Conversacion, config) -> dict:
     if intent == Intencion.VOLVER:
         return {"estado": anterior(estado, saltear).value}
 
+    if intent == Intencion.VER_MAS:
+        # La plantilla de horarios corta en 8 y dice "pedime 'más'". Sin esto
+        # cableado, pedir "más" caía en desconocido y el bot repetía la misma
+        # lista: ofrecer algo y no cumplirlo es peor que no ofrecerlo.
+        # Se queda en el mismo paso; lo único que se mueve es la ventana.
+        if estado == Estado.ESPERANDO_HORARIO:
+            return {"desde_horario": int(conv.get("desde_horario") or 0) + PAGINA}
+        return {}
+
     if intent in (Intencion.DESCONOCIDO, Intencion.SALUDO):
         # Un saludo a mitad de flujo no reinicia nada: repite el pedido actual.
         if estado == Estado.APERTURA:
@@ -227,6 +248,10 @@ async def avanzar(conv: Conversacion, config) -> dict:
     if estado == Estado.ESPERANDO_CONFIRMACION:
         return {**cambios, **await _reservar(conv, cambios, negocio, cfg)}
 
+    # Día nuevo, lista de horarios desde el principio.
+    if estado == Estado.ESPERANDO_DIA:
+        cambios["desde_horario"] = 0
+
     cambios["estado"] = siguiente(estado, saltear).value
     return cambios
 
@@ -250,7 +275,10 @@ def _limpiar_desde(paso: Estado) -> dict:
         Estado.ESPERANDO_DIA: ["fecha", "hora"],
         Estado.ESPERANDO_HORARIO: ["hora"],
     }.get(paso, [])
-    return {c: None for c in campos}
+    # La ventana de horarios siempre vuelve al principio: si no, elegir otro
+    # día heredaría el desplazamiento del anterior y la lista arrancaría por el
+    # medio sin nada que lo explique.
+    return {c: None for c in campos} | {"desde_horario": 0}
 
 
 async def _pasos_a_saltear(negocio: str, cfg: dict) -> set[Estado]:
@@ -297,9 +325,15 @@ async def _resolver(
         return None
 
     if estado == Estado.ESPERANDO_HORARIO:
-        libres = await _horarios(conv, negocio)
-        if indice is not None and indice < len(libres):
-            return {"hora": libres[indice].strftime("%H:%M")}
+        # El número se resuelve contra la lista que se MOSTRÓ, no contra los
+        # horarios recalculados. Acá se indexaba la lista completa: después de
+        # pedir "más", la pantalla decía 17:00 y el "1" guardaba las 13:00 —
+        # el bot confirmaba una hora que la persona nunca vio.
+        # Mientras mostrar y resolver lean fuentes distintas, ese desfasaje
+        # puede volver; `opciones` es exactamente lo que se imprimió.
+        mostradas = conv.get("opciones") or []
+        if indice is not None and indice < len(mostradas):
+            return {"hora": mostradas[indice]}
         if ent.get("hora"):
             return {"hora": ent["hora"]}
         return None
@@ -332,7 +366,7 @@ def _buscar(texto: str | None, opciones: list[tuple[str, str]]) -> list[str]:
 
 async def _cupos(conv: Conversacion, negocio: str):
     return await _aturno.dias_con_cupo(
-        negocio, conv["servicio_id"], date.today(), 7, conv.get("profesional_id")
+        negocio, conv["servicio_id"], hoy_del_negocio(), 7, conv.get("profesional_id")
     )
 
 
@@ -452,8 +486,15 @@ async def responder(conv: Conversacion, config) -> dict:
         dia = date.fromisoformat(conv["fecha"])
         if not libres:
             return {"respuesta": P.no_disponible(None, []), "opciones": []}
-        return {"respuesta": P.lista_horarios(dia, libres),
-                "opciones": [h.strftime("%H:%M") for h in libres[:8]]}
+        # La ventana que se está mostrando. Los números que responde la persona
+        # se resuelven contra `opciones`, así que mostrar y numerar tienen que
+        # salir del MISMO recorte o el "3" apunta a otra hora.
+        desde = int(conv.get("desde_horario") or 0)
+        if desde >= len(libres):       # pidió "más" cuando ya no quedaba
+            desde = 0
+        ventana = libres[desde:]
+        return {"respuesta": P.lista_horarios(dia, ventana, PAGINA),
+                "opciones": [h.strftime("%H:%M") for h in ventana[:PAGINA]]}
 
     if estado == Estado.ESPERANDO_NOMBRE:
         return {"respuesta": P.pedir_nombre(), "opciones": []}

@@ -28,6 +28,8 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from src.fechas import hoy as hoy_del_negocio
+
 from src.schemas import Alternativa, DiaConCupo, MotivoNoDisponible, Profesional, Servicio
 
 DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
@@ -116,7 +118,7 @@ def selector_dias(dias: list[DiaConCupo], hoy: date | None = None) -> str:
     La cantidad de días la define el negocio (`dias_a_mostrar`), no esta
     función: siete es un default, no una regla.
     """
-    hoy = hoy or date.today()
+    hoy = hoy or hoy_del_negocio()
     # El lunes de la semana en curso. Cruzar de semana = cambiar de bloque.
     semana_actual = hoy - timedelta(days=hoy.weekday())
 

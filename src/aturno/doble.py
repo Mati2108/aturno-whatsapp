@@ -22,6 +22,7 @@ import secrets
 from datetime import date, datetime, time, timedelta
 
 from src.aturno.base import ClienteAturno
+from src.fechas import TZ, ahora, hoy
 from src.schemas import (
     Alternativa,
     Consulta,
@@ -245,7 +246,7 @@ class AturnoDoble(ClienteAturno):
 
         for delta in range(0, 8):
             d = dia + timedelta(days=delta)
-            if d < date.today():
+            if d < hoy():
                 continue
             disp = await self.consultar_disponibilidad(
                 business_id, servicio_id, d, profesional_id
@@ -336,16 +337,24 @@ class AturnoDoble(ClienteAturno):
 
         Es como lo hace aturno (`generateTimeSlotsForDay`). Si el día está
         cerrado la lista es vacía, que es una respuesta válida y no un error.
+
+        Los horarios ya pasados quedan afuera. Acá se filtraban solo los DÍAS
+        pasados, así que a las 12:55 el bot todavía ofrecía las 09:00 de hoy —
+        y las aceptaba. Un turno para una hora que ya pasó no es un detalle
+        cosmético: es el sistema mintiendo sobre algo que la persona verifica
+        mirando el reloj.
         """
         abierto = HORARIOS.get(dia.weekday())
         if abierto is None:
             return []
         abre, cierra = abierto
+        momento_actual = ahora()
         horarios: list[time] = []
-        momento = datetime.combine(dia, abre)
-        limite = datetime.combine(dia, cierra)
+        momento = datetime.combine(dia, abre, tzinfo=TZ)
+        limite = datetime.combine(dia, cierra, tzinfo=TZ)
         while momento + timedelta(minutes=duracion_minutos) <= limite:
-            horarios.append(momento.time())
+            if momento > momento_actual:
+                horarios.append(momento.time())
             momento += timedelta(minutes=duracion_minutos)
         return horarios
 

@@ -72,6 +72,7 @@ Reglas de extracción:
 - Convertí los días a AAAA-MM-DD usando la tabla de arriba, no calcules.
 - "cualquiera", "me da igual", "el que sea" -> profesional: "cualquiera".
 - Si pregunta precio, horario, dirección o formas de pago -> consultar_info.
+- "más", "otro horario", "más tarde", "no me sirve ninguno" -> ver_mas.
 - Si el mensaje no encaja en ninguna intención, usá desconocido.
 """
 

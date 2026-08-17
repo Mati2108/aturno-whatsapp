@@ -51,11 +51,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date, datetime, time, timedelta
-from zoneinfo import ZoneInfo
 
 import httpx
 
 from src.aturno.base import ClienteAturno
+# El huso del negocio sale de un solo lugar. El contenedor corre en UTC, y ahí
+# `date.today()` devuelve el día siguiente a partir de las 21:00 de Argentina.
+from src.fechas import TZ
 from src.schemas import (
     Alternativa,
     Consulta,
@@ -70,13 +72,6 @@ from src.schemas import (
 )
 
 logger = logging.getLogger("pipeline.aturno.api")
-
-# El huso del negocio. No se usa `date.today()` a secas en ningún lado de este
-# archivo: el contenedor corre en UTC y a partir de las 21:00 de Argentina
-# `today()` ya devuelve el día siguiente. El síntoma sería el peor de todos —
-# ofrecer horarios de mañana creyendo que son de hoy— y solo aparecería de
-# noche, que es cuando nadie está mirando.
-TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
 # Los nombres de día tal como los guarda aturno en `schedule`.
 DIAS_JS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
