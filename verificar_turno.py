@@ -35,6 +35,7 @@ import argparse
 import asyncio
 import logging
 import re
+import unicodedata
 from datetime import date, datetime, timedelta
 
 import httpx
@@ -72,73 +73,75 @@ FUGAS = [
 # mirando qué opciones mostró el bot.
 
 def elegir_dia(opciones: list[str]) -> str:
-    """Responde el número del primer día que esté al menos DIAS_ADELANTE.
-
-    Si las opciones no son fechas, el guion se desalineó con el flujo — pasa
-    apenas se agrega o se saltea un paso. El mensaje lo dice en vez de reventar
-    con un "Invalid isoformat string: 'Juan Demo'", que fue exactamente lo que
-    salió la primera vez que corrió esto.
-    """
-    try:
-        fechas = [date.fromisoformat(o) for o in opciones]
-    except ValueError:
-        raise AssertionError(
-            "el guion esperaba el paso del DÍA y el bot está mostrando otra "
-            f"cosa: {opciones[:4]}"
-        ) from None
+    """El número del primer día que esté al menos DIAS_ADELANTE."""
+    fechas = [date.fromisoformat(o) for o in opciones]
     objetivo = hoy() + timedelta(days=DIAS_ADELANTE)
     for i, f in enumerate(fechas, 1):
         if f >= objetivo:
             return str(i)
-    return str(len(fechas))       # no hay ninguno tan lejos: el último que haya
+    return str(len(fechas))
 
 
-def pedir_servicio(opciones: list[str]) -> str:
-    """Pide el primer servicio del negocio, con sus palabras.
+def _sin_acentos(s: str) -> str:
+    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
 
-    Escrito así y no con un nombre fijo porque la prueba tiene que servir para
-    cualquier negocio: con "quiero un turno con el dentista" pasaba contra el
-    negocio real y fallaba contra el doble, que vende cortes de pelo. Una
-    prueba que solo anda contra un negocio no prueba el producto.
+
+def responder(estado: str, opciones: list[str], esc: dict) -> str:
+    """Qué contesta la persona, según el paso en el que el bot la dejó.
+
+    Escrito así y no como una lista de mensajes porque los pasos DEPENDEN del
+    negocio: con un solo servicio o un solo profesional, esos pasos no existen.
+    Un guion con las posiciones contadas a mano se desalinea entero el día que
+    un negocio tiene un servicio menos — que es exactamente lo que pasó acá la
+    primera vez.
     """
-    return f"quiero un turno para {opciones[0].lower()}" if opciones else "quiero un turno"
+    if estado == Estado.ESPERANDO_SERVICIO.value:
+        return esc.get("servicio") or "1"
+    if estado == Estado.ESPERANDO_STAFF.value:
+        return esc.get("staff") or str(len(opciones))      # "Me da igual"
+    if estado == Estado.ESPERANDO_DIA.value:
+        return elegir_dia(opciones)
+    if estado == Estado.ESPERANDO_HORARIO.value:
+        return "1"
+    if estado == Estado.ESPERANDO_NOMBRE.value:
+        return esc["cliente"]
+    if estado == Estado.ESPERANDO_CONFIRMACION.value:
+        return esc.get("confirmar") or "sí"
+    return "hola"
 
 
-# El orden real del flujo es: servicio → profesional → día → horario → nombre →
-# confirmación. Cualquier guion que se saltee un paso desalinea todo lo que
-# sigue, así que están escritos completos.
+# Cada escenario dice QUÉ hace distinto, no en qué mensaje lo hace.
+# `interrupciones` inyecta un mensaje la primera vez que se llega a ese paso:
+# ahí están los caminos que no son el feliz.
 ESCENARIOS = [
     {
-        "nombre": "Por números, de principio a fin",
+        "nombre": "De principio a fin, tocando los números",
         "prueba": "el camino que hace casi todo el mundo",
         "cliente": "Ana Pérez",
-        "guion": ["hola", "1", "3", elegir_dia, "1", "Ana Pérez", "sí"],
     },
     {
         "nombre": "Escribiendo, sin usar los números",
         "prueba": "que se pueda hablar normal y no solo tocar opciones",
         "cliente": "Bruno Díaz",
-        "guion": ["hola", pedir_servicio, "me da igual",
-                  elegir_dia, "1", "Bruno Díaz", "dale"],
+        "servicio": "__nombre__",     # responde con el nombre del servicio
+        "staff": "me da igual",
+        "confirmar": "dale",
     },
     {
         "nombre": "Cambia de idea a mitad",
         "prueba": "que volver atrás no rompa nada y se pueda terminar igual",
         "cliente": "Carla Gómez",
-        "guion": ["hola", "1", "3", elegir_dia, "mejor cambio el día",
-                  elegir_dia, "1", "Carla Gómez", "sí"],
+        "interrupciones": {Estado.ESPERANDO_HORARIO.value: "mejor cambio el día"},
     },
     {
         "nombre": "Pide una persona y después sigue",
         "prueba": "que la salida de emergencia no borre lo elegido",
         "cliente": "Diego Luna",
-        "guion": ["hola", "1", "3", elegir_dia, "quiero hablar con alguien",
-                  "1", "Diego Luna", "sí"],
+        "interrupciones": {Estado.ESPERANDO_HORARIO.value: "quiero hablar con alguien"},
+        "despues_de_interrumpir": "seguir con el bot",
     },
 ]
 
-
-# ══════════════════════════════════════════════════════════════════
 
 class Verificacion:
     def __init__(self) -> None:
@@ -153,13 +156,30 @@ class Verificacion:
 
 
 async def conversar(grafo, hilo: str, negocio: str, nombre_negocio: str,
-                    guion: list, v: Verificacion) -> dict:
-    """Corre la conversación entera y devuelve el estado final."""
+                    esc: dict, v: Verificacion, max_pasos: int = 22) -> dict:
+    """Habla hasta que el turno quede confirmado, o hasta darse por vencida."""
     salida: dict = {}
-    for paso in guion:
+    pendiente: list[str] = ["hola"]
+    interrumpidos: set[str] = set()
+
+    for _ in range(max_pasos):
         estado_previo = await grafo.aget_state({"configurable": {"thread_id": hilo}})
-        opciones = (estado_previo.values or {}).get("opciones") or []
-        texto = paso(opciones) if callable(paso) else paso
+        vals = estado_previo.values or {}
+        estado = vals.get("estado") or Estado.APERTURA.value
+        opciones = vals.get("opciones") or []
+
+        if pendiente:
+            texto = pendiente.pop(0)
+        elif (estado in (esc.get("interrupciones") or {})
+              and estado not in interrumpidos):
+            interrumpidos.add(estado)
+            texto = esc["interrupciones"][estado]
+            if esc.get("despues_de_interrumpir"):
+                pendiente.append(esc["despues_de_interrumpir"])
+        else:
+            texto = responder(estado, opciones, esc)
+            if texto == "__nombre__":
+                texto = f"quiero un turno para {opciones[0].lower()}" if opciones else "quiero un turno"
 
         salida = await grafo.ainvoke(
             {"mensaje": texto},
@@ -173,8 +193,11 @@ async def conversar(grafo, hilo: str, negocio: str, nombre_negocio: str,
         for patron, que in FUGAS:
             if re.search(patron, respuesta):
                 v.chequear(False, f"filtró {que} al responder «{texto}»")
-        if not respuesta.strip():
+        if not respuesta.strip() and salida.get("estado") != Estado.EN_MANOS_HUMANAS.value:
             v.chequear(False, f"respondió vacío a «{texto}»")
+
+        if salida.get("estado") == Estado.CONFIRMADO.value:
+            return salida
     return salida
 
 
@@ -237,7 +260,7 @@ async def main() -> int:
         print(f"   {GRIS}{esc['prueba']}{FIN}")
         try:
             final = await conversar(grafo, f"verif-{i}", negocio, nombre_negocio,
-                                    esc["guion"], v)
+                                    esc, v)
         except Exception as e:  # noqa: BLE001
             v.chequear(False, "la conversación se cortó", f"{type(e).__name__}: {e}")
             continue
