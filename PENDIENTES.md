@@ -7,19 +7,20 @@ por lo que más duele.
 
 ## 🔴 Bloquea la entrega
 
-### 1. Las credenciales en Render están mal cargadas
+### 1. La clave de Anthropic en Render está cortada
 
-**Síntoma:** el bot desplegado recibe los mensajes y no contesta. En los logs
-aparecen dos errores 401 seguidos — uno del clasificador, otro al enviar por
-Twilio.
+**Síntoma:** el bot desplegado recibe los mensajes y no contesta.
 
-**Causa probable:** el `TWILIO_ACCOUNT_SID` y el `TWILIO_AUTH_TOKEN` quedaron
-cruzados al pegarlos. El error de Twilio dice *"invalid username"*, y en Twilio
-el username es el Account SID. Miden 34 y 32 caracteres, van uno debajo del
-otro en el formulario y es fácil equivocarse.
+**Causa, ya confirmada con `/diagnostico`:** al pegar la `ANTHROPIC_API_KEY` en
+Render se perdió el primer carácter. Quedó con 107 caracteres empezando en
+`k-ant-` cuando tiene que tener 108 y empezar en `sk-ant-`. Falta una sola
+letra y eso alcanza para un 401 en cada mensaje.
 
-**Cómo verificarlo ahora:** abrir `/diagnostico` en el servicio desplegado.
-Dice cuál credencial falla y por qué, sin exponer ningún valor.
+Lo de Twilio (SID y token cruzados) ya está corregido: ese chequeo da ok.
+
+**Cómo verificarlo:** abrir `/diagnostico` en el servicio desplegado. Dice cuál
+credencial falla y por qué, sin exponer ningún valor. Las tres tienen que decir
+`"valida": true`.
 
 **Los valores correctos:**
 
@@ -31,17 +32,19 @@ Dice cuál credencial falla y por qué, sin exponer ningún valor.
 | `GEMINI_API_KEY` | 53 | `AQ.Ab8R` | `ZVlw` |
 | `PUBLIC_URL` | — | `https://aturno-whatsapp.onrender.com` | |
 
-### 2. El servicio se duerme
+### 2. El servicio se duerme — resuelto, falta verificar
 
-Render free apaga el contenedor a los 15 minutos sin uso, y despertarlo lleva
-50 segundos o más. Twilio abandona el webhook a los ~15 segundos, así que
-**el primer mensaje después de una pausa se pierde entero** — la persona
-escribe y no recibe nada.
+Render free apaga el contenedor a los 15 minutos sin uso. Medido: despertarlo
+tardó **87 segundos**. Twilio abandona el webhook a los ~15, así que **el
+primer mensaje después de una pausa se perdía entero** — la persona escribía y
+no recibía nada. Para alguien que prueba una sola vez, eso es un bot roto.
 
-Para el jurado esto es fatal: prueba una vez, no pasa nada, se va.
+Solución puesta: `.github/workflows/despertador.yml` le pega a `/salud` cada 10
+minutos desde GitHub Actions. Gratis en repos públicos y sin cuentas nuevas.
 
-Opciones: un ping externo cada 10 minutos (gratis, cron-job.org), o pasar a
-un plan que no duerma.
+Queda por confirmar que GitHub lo esté disparando (pestaña Actions del repo).
+Y anotado para dentro de unos meses: GitHub desactiva los cron de un repo sin
+actividad por 60 días.
 
 ### 3. No hay video
 
