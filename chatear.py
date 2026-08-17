@@ -69,6 +69,14 @@ async def main() -> None:
     )
 
     cliente, negocio, nombre_negocio = _cliente(args.negocio)
+    if args.negocio:
+        # El nombre sale de aturno y no del slug: es lo que la persona ve en el
+        # saludo, y "aturno" no es como se llama el negocio.
+        try:
+            doc = await cliente._negocio(args.negocio)  # noqa: SLF001
+            nombre_negocio = doc.get("name") or args.negocio
+        except Exception:  # noqa: BLE001 — sin nombre se sigue con el slug
+            pass
     F.configurar(cliente)
     # MemorySaver y no Postgres: esto es una sesión de prueba, no tiene que
     # dejar rastro ni exigir una base levantada para poder probar el bot.
