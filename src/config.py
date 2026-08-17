@@ -81,6 +81,12 @@ class Config(BaseSettings):
     # aturno; mientras no exista, el aviso queda en el log del servicio.
     escalacion_webhook: str = ""
 
+    # El panel de aturno: adónde mandarle cada mensaje para que lo muestre, y
+    # el secreto compartido que autentica los dos caminos. Vacío = el bot no
+    # avisa nada y el panel no puede contestar; todo lo demás sigue igual.
+    panel_url: str = ""
+    panel_secreto: str = ""
+
     # Cuánto espera el bot, callado, después de escalar. Pasado ese rato sin
     # que nadie del negocio conteste, vuelve a tomar la conversación en vez de
     # dejar a la persona hablándole a un chat mudo.

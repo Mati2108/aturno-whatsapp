@@ -33,11 +33,20 @@ from twilio.rest import Client
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from src.agentes import flujo
+from src.agentes.estados import Estado
+from src.api.conversaciones import (
+    Enviado,
+    EventoDeConversacion,
+    MensajeDelPanel,
+    _secreto_valido,
+    avisar_a_aturno,
+    evento,
+)
 from src.agentes.flujo import construir_flujo, hilo_de
 from src.aturno.base import ClienteAturno
 from src.aturno.doble import AturnoDoble
 from src.config import TENANTS, config, tenant_por_numero
-from src.fechas import calendario
+from src.fechas import ahora, calendario
 from src.observabilidad import configurar_trazas, trazado_activo
 from src.rag.indice import modelo_en_uso
 from src.schemas import MensajeEntrante, Tenant
@@ -292,6 +301,66 @@ class Salud(BaseModel):
     trazado: bool = Field(description="Si las trazas van a Phoenix.")
 
 
+@app.post("/panel/responder", response_model=Enviado)
+async def responder_desde_el_panel(
+    mensaje: MensajeDelPanel,
+    x_panel_secret: str = Header(default=""),
+) -> Enviado:
+    """El dueño escribió desde el panel: sale por WhatsApp con su número.
+
+    Y además pone la conversación EN MANOS HUMANAS. Sin eso, el bot seguiría
+    contestando en paralelo y la persona recibiría dos respuestas a la vez —
+    una de quien la está atendiendo y otra de la máquina, encima.
+    """
+    if not _secreto_valido(x_panel_secret):
+        # 404 y no 403: un 403 confirma que el endpoint existe y que lo único
+        # que falta es el secreto, que es justo lo que no conviene confirmarle
+        # a alguien que está probando.
+        raise HTTPException(status_code=404, detail="No encontrado")
+
+    negocio = next((t for t in TENANTS.values()
+                    if t.business_id == mensaje.business_id), None)
+    if negocio is None:
+        raise HTTPException(status_code=400, detail="Ese negocio no atiende por acá")
+
+    await _pasar_a_manos_humanas(negocio.business_id, mensaje.telefono)
+
+    try:
+        _enviar(mensaje.telefono, negocio, mensaje.texto)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("el panel no pudo mandar el mensaje")
+        return Enviado(enviado=False, detalle=str(e)[:120], momento=ahora().isoformat())
+
+    await avisar_a_aturno(evento(
+        mensaje.business_id, mensaje.telefono, mensaje.texto, de_quien="negocio"))
+    return Enviado(enviado=True, detalle="ok", momento=ahora().isoformat())
+
+
+async def _pasar_a_manos_humanas(business_id: str, telefono: str) -> None:
+    """Marca la conversación como atendida por una persona, sin perder nada.
+
+    Se escribe directo en el checkpointer y no se hace pasar un mensaje por el
+    grafo: el dueño contestando no es un mensaje del cliente, y meterlo por el
+    flujo lo haría avanzar de paso.
+    """
+    if _grafo is None:
+        return
+    cfg = {"configurable": {"thread_id": hilo_de(business_id, telefono)}}
+    try:
+        actual = await _grafo.aget_state(cfg)
+        vals = actual.values or {}
+        if vals.get("estado") == Estado.EN_MANOS_HUMANAS.value:
+            return
+        await _grafo.aupdate_state(cfg, {
+            "estado": Estado.EN_MANOS_HUMANAS.value,
+            "estado_previo": vals.get("estado") or Estado.APERTURA.value,
+            "humano_desde": ahora().isoformat(),
+        })
+        logger.info("%s pasó a manos del negocio desde el panel", telefono)
+    except Exception:  # noqa: BLE001 — que falle esto no puede frenar el envío
+        logger.warning("no se pudo marcar la conversación", exc_info=True)
+
+
 @app.get("/salud", response_model=Salud)
 async def salud() -> Salud:
     """Chequeo rápido: ¿está vivo y con qué configuración?"""
@@ -429,12 +498,36 @@ async def _procesar_y_responder(
             "¿Probás de nuevo en un minuto?"
         )
 
+    # El panel ve la conversación entera, no solo las escalaciones. Un dueño
+    # que solo recibe el aviso "alguien pidió una persona" tiene que adivinar
+    # qué venía pasando; con los mensajes a la vista contesta sabiendo.
+    #
+    # Se avisa DESPUÉS de procesar y antes de enviar, para que el orden en el
+    # panel sea el mismo que en el chat.
+    estado_ahora = None
+    if _grafo is not None:
+        try:
+            st = await _grafo.aget_state(
+                {"configurable": {"thread_id": hilo_de(negocio.business_id, mensaje.de)}})
+            estado_ahora = (st.values or {}).get("estado")
+        except Exception:  # noqa: BLE001
+            pass
+
+    await avisar_a_aturno(evento(
+        negocio.business_id, mensaje.de, mensaje.texto, de_quien="cliente",
+        necesita_humano=estado_ahora == Estado.EN_MANOS_HUMANAS.value,
+        paso=estado_ahora,
+    ))
+
     # Un texto vacío es el bot callándose a propósito: la conversación está en
     # manos del negocio y responder ahí sería hablarle encima a quien atiende.
     if not (texto or "").strip():
         logger.info("sin respuesta para %s (conversación escalada)", mensaje.de)
         return
+
     _enviar(mensaje.de, negocio, texto)
+    await avisar_a_aturno(evento(
+        negocio.business_id, mensaje.de, texto, de_quien="bot", paso=estado_ahora))
 
 
 async def _componer_respuesta(mensaje: MensajeEntrante, negocio: Tenant) -> str:
