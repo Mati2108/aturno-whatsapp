@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 
 from fastapi import BackgroundTasks, FastAPI, Form, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
@@ -188,6 +189,73 @@ async def _verificar_credenciales() -> dict[str, EstadoCredencial]:
 async def diagnostico() -> dict[str, EstadoCredencial]:
     """Cuál credencial está mal cargada, sin exponer ninguna."""
     return await _verificar_credenciales()
+
+
+class Cupo(BaseModel):
+    """Cuántos mensajes quedan antes de que Twilio empiece a rechazar."""
+
+    cuenta: str = Field(description="'Trial' o 'Full'. En Full no hay tope.")
+    tope: int | None = Field(description="Mensajes por ventana; None si no hay.")
+    enviados_24h: int = Field(description="Salientes en las últimas 24 horas.")
+    restantes: int | None = Field(description="Cuántos quedan; None si no hay tope.")
+    turnos_posibles: int | None = Field(
+        description="Reservas completas que entran con lo que queda."
+    )
+    detalle: str
+
+
+# Una reserva de punta a punta son ocho mensajes del bot: apertura, servicios,
+# staff, días, horarios, nombre, resumen y confirmación. Sirve para traducir
+# "quedan 12 mensajes" a algo accionable: "entra una demo, no dos".
+MENSAJES_POR_TURNO = 8
+
+
+@app.get("/cupo", response_model=Cupo)
+async def cupo() -> Cupo:
+    """Cuánto margen queda en Twilio antes de filmar o mostrarle esto a alguien.
+
+    Existe porque el tope se agotó en medio de una prueba y el síntoma fue el
+    peor posible: el bot procesó todo bien y la persona no recibió nada. Desde
+    afuera es idéntico a un bot caído.
+
+    El límite es una ventana MÓVIL de 24 horas, no un tope que se repone a
+    medianoche: los mensajes se liberan de a uno a medida que cumplen 24 horas.
+    Por eso se cuenta hacia atrás desde ahora y no desde el comienzo del día.
+    """
+    cfg = config()
+    sid = cfg.twilio_account_sid
+    try:
+        cliente = Client(sid, cfg.twilio_auth_token)
+        tipo = cliente.api.accounts(sid).fetch().type or "Trial"
+
+        desde = datetime.now(timezone.utc) - timedelta(hours=24)
+        # limit=200 corta la paginación: pasado el tope el número exacto no
+        # cambia ninguna decisión, y sin límite esto pagina la cuenta entera.
+        enviados = sum(
+            1
+            for m in cliente.messages.list(date_sent_after=desde, limit=200)
+            if (m.direction or "").startswith("outbound")
+        )
+
+        if tipo != "Trial":
+            return Cupo(cuenta=tipo, tope=None, enviados_24h=enviados,
+                        restantes=None, turnos_posibles=None,
+                        detalle="cuenta paga: sin tope diario")
+
+        tope = 50
+        quedan = max(0, tope - enviados)
+        return Cupo(
+            cuenta=tipo, tope=tope, enviados_24h=enviados, restantes=quedan,
+            turnos_posibles=quedan // MENSAJES_POR_TURNO,
+            detalle=(
+                "sin margen: Twilio va a rechazar los envíos"
+                if quedan == 0
+                else f"alcanza para {quedan // MENSAJES_POR_TURNO} reserva(s) completa(s)"
+            ),
+        )
+    except Exception as e:  # noqa: BLE001 — un diagnóstico que se cae no sirve
+        return Cupo(cuenta="?", tope=None, enviados_24h=-1, restantes=None,
+                    turnos_posibles=None, detalle=str(e)[:100])
 
 
 class Salud(BaseModel):
