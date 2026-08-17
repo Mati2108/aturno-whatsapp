@@ -31,14 +31,28 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Pegarle a /salud
+      # Los DOS servicios, no solo el bot.
+      #
+      # Con ATURNO_MODO=api el bot le pega al backend de aturno para todo:
+      # servicios, horarios y la reserva. Los dos están en el plan gratuito, y
+      # despertar el backend de aturno midió 26 segundos. El techo de
+      # procesamiento del bot son 30. O sea que un bot despierto hablando con
+      # un aturno dormido llega al límite en el primer mensaje, y el síntoma
+      # sería "está tardando más de lo normal" sin ninguna causa visible.
+      - name: Despertar los dos servicios
         run: |
           # --max-time 120: si el contenedor estaba dormido, ESTE pedido es el
           # que lo despierta y tarda. Ahí está el punto: que el lento sea este
           # y no el de una persona real.
-          codigo=$(curl -s -o /dev/null -w "%{http_code}" --max-time 120 \
-            "${{ vars.URL_SERVICIO || 'https://aturno-whatsapp.onrender.com' }}/salud")
-          echo "respuesta: $codigo"
-          # No falla el job por un 5xx puntual: un despertador que manda mails
-          # de error todas las noches se termina ignorando.
-          [ "$codigo" = "200" ] || echo "::warning::el servicio respondió $codigo"
+          ping() {
+            codigo=$(curl -s -o /dev/null -w "%{http_code}" --max-time 120 "$2")
+            echo "$1: $codigo"
+            # No falla el job por un 5xx puntual: un despertador que manda
+            # mails de error todas las noches se termina ignorando.
+            case "$codigo" in
+              200|404) ;;   # 404 del backend de aturno también prueba que está vivo
+              *) echo "::warning::$1 respondió $codigo" ;;
+            esac
+          }
+          ping bot     "${{ vars.URL_SERVICIO || 'https://aturno-whatsapp.onrender.com' }}/salud"
+          ping aturno  "${{ vars.URL_ATURNO || 'https://aturno-backend.onrender.com' }}/api/public/business/_ping"
