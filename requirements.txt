@@ -15,8 +15,12 @@ langchain-google-genai==4.3.4
 langchain-ollama==1.1.0
 
 # Persistencia del checkpointer
+# psycopg[binary] y no psycopg pelado: la variante binaria trae libpq incluida.
+# Sin el extra, psycopg busca libpq en el sistema — que existe en una Mac con
+# Postgres instalado por brew, pero no en una imagen slim. El deploy falló con
+# "no pq wrapper available" mientras en local andaba perfecto.
 langgraph-checkpoint-postgres==3.1.2
-psycopg==3.3.4
+psycopg[binary]==3.3.4
 psycopg-pool==3.3.1
 
 # RAG
