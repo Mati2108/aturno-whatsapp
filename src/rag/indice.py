@@ -74,6 +74,33 @@ CARPETA_INDICE = RAIZ / "chroma"
 MODELO_LOCAL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 MODELO_API = "models/gemini-embedding-001"
 
+# Debajo de esto, el fragmento no responde la pregunta y no se usa.
+#
+# Medido sobre el negocio `aturno` con doce preguntas, seis que su documento
+# responde y seis que no (estacionamiento, tarjeta, mascotas, wifi, obra
+# social, y una directamente de otro rubro):
+#
+#     con respuesta en el documento .... mejor puntaje 0.621 a 0.729
+#     sin respuesta en el documento .... mejor puntaje 0.489 a 0.583
+#
+# 0.60 cae en el hueco y separa los doce casos. El más cercano por abajo es
+# "¿atienden obra social?" con 0.583, que es justamente una pregunta que el
+# negocio debería contestar en el cuestionario: cuando la conteste, va a subir
+# por encima del umbral sola.
+#
+# Doce preguntas sobre un negocio no prueban nada en general; alcanzan para
+# elegir un número y para que se pueda volver a medir cuando cambie el modelo
+# de embeddings. Si se cambia el modelo, hay que rehacer esta medición: los
+# puntajes no son comparables entre modelos.
+UMBRAL = 0.60
+
+# Cuántos fragmentos como máximo entran en una respuesta. En la medición, para
+# toda pregunta con respuesta el segundo fragmento ya quedaba en 0.588 o menos,
+# o sea que el umbral por sí solo devuelve uno. El tope está para el caso en
+# que una respuesta quede repartida en dos secciones, y para que nunca vuelva a
+# salir el chorizo de tres bloques que recibía la persona antes.
+MAX_FRAGMENTOS = 2
+
 
 class EmbeddingsLocales(Embeddings):
     """Adaptador mínimo sobre fastembed (ONNX), sin servicios externos.
@@ -169,6 +196,14 @@ def construir_indice(recrear: bool = False) -> Chroma:
     documentos: list[Document] = []
     for archivo in sorted(CARPETA_DATOS.glob("*.md")):
         business_id = archivo.stem
+        # Los archivos en MAYÚSCULAS son documentación de la carpeta, no el
+        # conocimiento de un negocio. Sin esto, CUESTIONARIO.md se indexaba
+        # como si existiera un negocio llamado "CUESTIONARIO": nadie lo
+        # consulta nunca, pero paga embeddings y confunde a quien revisa el
+        # índice preguntándose de dónde salió ese tenant.
+        if business_id.isupper():
+            logger.info("%s: documentación, no se indexa", archivo.name)
+            continue
         trozos = _fragmentar(archivo.read_text(encoding="utf-8"), business_id)
         documentos.extend(trozos)
         logger.info("%s → %d fragmentos", archivo.name, len(trozos))
@@ -216,17 +251,28 @@ class Recuperador:
         self._k = k
 
     async def buscar(self, consulta: str) -> list[Document]:
-        """Devuelve los fragmentos más relevantes, solo de este negocio."""
-        resultados = await self._indice.asimilarity_search(
+        """Los fragmentos relevantes de ESTE negocio. Puede no devolver ninguno.
+
+        Devolver la lista vacía es el comportamiento importante, y es lo que
+        antes no pasaba nunca: una búsqueda por los k más cercanos siempre trae
+        k resultados, tengan que ver o no. A "¿tienen estacionamiento?" —un dato
+        que este negocio no cargó— el bot contestaba la dirección y el teléfono,
+        con la misma seguridad que si fuera la respuesta. Para quien pregunta,
+        un bot que responde otra cosa y uno que inventa se parecen bastante.
+        """
+        crudos = await self._indice.asimilarity_search_with_relevance_scores(
             consulta,
             k=self._k,
             filter={"business_id": self._business_id},
         )
+        resultados = [d for d, puntaje in crudos if puntaje >= UMBRAL][:MAX_FRAGMENTOS]
         logger.info(
-            "RAG [%s] '%s' → %d fragmento(s): %s",
+            "RAG [%s] '%s' → %d de %d (mejor %.3f): %s",
             self._business_id,
             consulta[:40],
             len(resultados),
+            len(crudos),
+            crudos[0][1] if crudos else 0.0,
             [d.metadata.get("seccion") for d in resultados],
         )
         return resultados

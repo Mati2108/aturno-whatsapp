@@ -441,8 +441,11 @@ async def responder(conv: Conversacion, config) -> dict:
                 "opciones": [s.nombre for s in servicios]}
 
     if especial == "info":
+        # Sin texto, el negocio no cargó esa respuesta. Se dice eso y no
+        # "no puedo hacer eso", que era lo que salía antes y hacía sonar la
+        # pregunta como el problema.
         texto = datos.get("texto") or ""
-        return {"respuesta": P.respuesta_info(texto) if texto else P.fuera_de_alcance()}
+        return {"respuesta": P.respuesta_info(texto) if texto else P.sin_dato()}
 
     if especial == "confirmado":
         return {"respuesta": P.confirmado(

@@ -273,6 +273,27 @@ def fuera_de_alcance() -> str:
     )
 
 
+def sin_dato() -> str:
+    """La pregunta se entendió, pero el negocio no cargó esa respuesta.
+
+    Es distinto de `fuera_de_alcance()`, que significa "no sé hacer eso". Acá
+    el bot sí sabe hacerlo y el dato no está. Mezclarlos hacía que a
+    "¿tienen estacionamiento?" contestara "eso no lo puedo hacer por acá", que
+    suena a que la pregunta estuvo mal formulada.
+
+    Lo que no hace, y es el punto, es adivinar. El conocimiento del negocio se
+    carga respondiendo un cuestionario donde responder es opcional, así que
+    muchas preguntas van a llegar sin dato. Un bot que rellena los huecos con
+    algo verosímil manda a alguien hasta el local confiando en una invención.
+    Un "no lo tengo" sale barato; un dato inventado no.
+    """
+    return (
+        "Ese dato no lo tengo cargado y no quiero mandarte cualquier cosa. "
+        "Te lo confirman en el local.\n\n"
+        "¿Querés que te saque un turno?"
+    )
+
+
 def no_entendi(reintento: str) -> str:
     """Repite el CTA del estado actual en vez de dejar a la persona colgada."""
     return "\n".join(["No te entendí.", "", reintento])
