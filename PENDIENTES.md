@@ -1,56 +1,82 @@
 # Pendientes
 
-Lo que falta, lo que está a medias y lo que se decidió dejar afuera. Ordenado
-por lo que más duele.
+Lo que falta, lo que está a medias y lo que se decidió dejar afuera.
+
+**La prioridad es una sola: que se pueda sacar un turno, fácil y sin
+problemas.** Todo lo demás se agrega después. Un pendiente que no toca ese
+camino no es urgente, por más que parezca importante.
+
+---
+
+## ✅ El camino principal: verificado
+
+    python verificar_turno.py
+
+Corre cuatro conversaciones completas contra el aturno REAL, y por cada una
+busca después el turno en la agenda con el código que el bot le dio a la
+persona. No alcanza con que el bot diga "listo": el turno tiene que estar.
+
+Los cuatro escenarios son los caminos que hace la gente de verdad:
+
+| Escenario | Qué prueba |
+|---|---|
+| Por números, de principio a fin | el camino que hace casi todo el mundo |
+| Escribiendo, sin usar los números | que se pueda hablar normal |
+| Cambia de idea a mitad | que volver atrás no rompa nada |
+| Pide una persona y después sigue | que la salida de emergencia no borre lo elegido |
+
+Y por cada turno verifica en aturno: que exista, el nombre, el teléfono, el
+servicio, que la fecha no sea pasada y que el estado ocupe el horario. Después
+cancela lo que creó, así se puede correr las veces que haga falta.
+
+**Última corrida (17/08/2026): los cuatro escenarios en verde.** Con `--doble`
+corre sin red; con `--no-limpiar` deja los turnos para mirarlos en el panel.
 
 ---
 
 ## 🔴 Bloquea la entrega
 
-### 1. La clave de Anthropic en Render está cortada
+### 1. Falta probarlo por WhatsApp de punta a punta
 
-**Síntoma:** el bot desplegado recibe los mensajes y no contesta.
+Es lo único del camino principal que todavía no se verificó con una persona
+real escribiendo. Todo lo anterior a Twilio está probado; lo que falta es el
+último salto.
 
-**Causa, ya confirmada con `/diagnostico`:** al pegar la `ANTHROPIC_API_KEY` en
-Render se perdió el primer carácter. Quedó con 107 caracteres empezando en
-`k-ant-` cuando tiene que tener 108 y empezar en `sk-ant-`. Falta una sola
-letra y eso alcanza para un 401 en cada mensaje.
+Bloqueado hasta que haya cupo en Twilio: la cuenta trial corta a los 50
+mensajes por ventana móvil de 24 horas. `GET /cupo` dice cuánto queda.
 
-Lo de Twilio (SID y token cruzados) ya está corregido: ese chequeo da ok.
+### 2. Las variables de aturno faltan en Render
 
-**Cómo verificarlo:** abrir `/diagnostico` en el servicio desplegado. Dice cuál
-credencial falla y por qué, sin exponer ningún valor. Las tres tienen que decir
-`"valida": true`.
+El servicio desplegado sigue hablando con el doble en memoria. En Render →
+`aturno-whatsapp` → Environment:
 
-**Los valores correctos:**
+    ATURNO_MODO=api
+    ATURNO_API_URL=https://aturno-backend.onrender.com
 
-| Variable | Largo | Empieza | Termina |
-|---|---|---|---|
-| `ANTHROPIC_API_KEY` | 108 | `sk-ant-` | `vwAA` |
-| `TWILIO_ACCOUNT_SID` | 34 | `AC126c1` | `a0c9` |
-| `TWILIO_AUTH_TOKEN` | 32 | `9156503` | `b6ed` |
-| `GEMINI_API_KEY` | 53 | `AQ.Ab8R` | `ZVlw` |
-| `PUBLIC_URL` | — | `https://aturno-whatsapp.onrender.com` | |
-
-### 2. El servicio se duerme — resuelto, falta verificar
-
-Render free apaga el contenedor a los 15 minutos sin uso. Medido: despertarlo
-tardó **87 segundos**. Twilio abandona el webhook a los ~15, así que **el
-primer mensaje después de una pausa se perdía entero** — la persona escribía y
-no recibía nada. Para alguien que prueba una sola vez, eso es un bot roto.
-
-Solución puesta: `.github/workflows/despertador.yml` le pega a `/salud` cada 10
-minutos desde GitHub Actions. Gratis en repos públicos y sin cuentas nuevas.
-
-Queda por confirmar que GitHub lo esté disparando (pestaña Actions del repo).
-Y anotado para dentro de unos meses: GitHub desactiva los cron de un repo sin
-actividad por 60 días.
+Sin esas dos, un turno sacado por WhatsApp no llega a la agenda.
 
 ### 3. No hay video
 
 25 de los 100 puntos de la CoderCUP son "Claridad: ¿tu video explica el qué y
-el cómo?". Además la consigna aclara que el primer filtro se hace sobre la
-explicación del proyecto.
+el cómo?". La consigna aclara que el primer filtro se hace sobre la explicación
+del proyecto. El mismo video va a Spark Cloud, que mira otra cosa: qué
+problema, de qué tamaño, y por qué vos.
+
+---
+
+## ⚙️ Resuelto, para no volver a buscarlo
+
+**Credenciales en Render.** La `ANTHROPIC_API_KEY` se había pegado sin el
+primer carácter (107 en vez de 108, `k-ant-` en vez de `sk-ant-`). `GET
+/diagnostico` dice cuál credencial falla sin exponer ningún valor; las tres
+tienen que decir `"valida": true`.
+
+**El servicio se dormía.** Render free apaga el contenedor a los 15 minutos y
+despertarlo medía 87 segundos; Twilio abandona a los ~15, así que el primer
+mensaje después de una pausa se perdía entero.
+`.github/workflows/despertador.yml` le pega a `/salud` y al backend de aturno
+cada 10 minutos. Anotado para dentro de unos meses: GitHub desactiva los cron
+de un repo sin actividad por 60 días.
 
 ---
 
@@ -197,6 +223,11 @@ Salieron de usarlo, no de imaginarlo.
   medias.
 - **No maneja señas.** Los servicios con depósito previo (coloración pide 30%)
   se reservan sin cobrarlo.
+- **No cobra la seña.** El servicio Dentista tiene `requiresDeposit: true`, pero
+  el bot crea la reserva sin `depositInfo`, así que nace en `pending` —firme—
+  en vez de `pending_deposit`. O sea que **por WhatsApp se saltea la seña que
+  la web sí cobra**. Es lo primero a resolver después del camino principal:
+  toca plata.
 - **La sesión no vence.** Si alguien deja una conversación a medias y vuelve a
   la semana, sigue en el mismo paso. Debería reiniciarse a los 30 minutos.
 - **El RAG no cita la fuente.** Contesta con el fragmento pero no dice de qué
