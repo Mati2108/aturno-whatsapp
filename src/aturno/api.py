@@ -225,6 +225,10 @@ class AturnoAPI(ClienteAturno):
 
     # ---------- la interfaz ----------
 
+    async def nombre_visible(self, business_id: str) -> str | None:
+        doc = await self._negocio(business_id)
+        return (doc.get("businessInfo") or {}).get("name") or doc.get("name")
+
     async def contacto(self, business_id: str) -> Contacto:
         """El contacto del negocio, para derivar a una persona.
 

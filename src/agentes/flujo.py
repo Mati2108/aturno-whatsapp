@@ -48,7 +48,11 @@ from src.agentes.estados import (
     siguiente,
 )
 from src.aturno.base import ClienteAturno
-from src.config import config
+# Alias a propósito: los nodos de LangGraph reciben un parámetro llamado
+# `config`, que tapaba a esta función y la volvía un dict. El error salía
+# recién al usarla, y decía "'dict' object is not callable" — que no señala
+# a ningún lado.
+from src.config import config as ajustes
 from src.escalacion import Escalacion, notificar
 from src.fechas import ahora
 from src.fechas import hoy as hoy_del_negocio
@@ -404,7 +408,7 @@ def _espera_vencida(conv: Conversacion) -> bool:
         return True
     try:
         return (ahora() - datetime.fromisoformat(desde)).total_seconds() > \
-            config().escalacion_minutos * 60
+            ajustes().escalacion_minutos * 60
     except ValueError:
         return True
 
@@ -424,7 +428,7 @@ async def _escalar(conv: Conversacion, cfg: dict, negocio: str,
         paso=estado.value,
         ultimo_mensaje=conv.get("mensaje") or "",
     )
-    llego = await notificar(aviso, config().escalacion_webhook or None)
+    llego = await notificar(aviso, ajustes().escalacion_webhook or None)
     return {
         "estado": Estado.EN_MANOS_HUMANAS.value,
         "estado_previo": estado.value,
@@ -645,7 +649,7 @@ async def responder(conv: Conversacion, config) -> dict:
                 "opciones": paso.get("opciones", [])}
 
     if especial == "link":
-        base = (config().aturno_web_url or "").rstrip("/")
+        base = (ajustes().aturno_web_url or "").rstrip("/")
         url = f"{base}/{negocio}" if base else None
         return {"respuesta": P.link_web(nombre_negocio, url)}
 

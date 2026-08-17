@@ -448,6 +448,14 @@ async def _componer_respuesta(mensaje: MensajeEntrante, negocio: Tenant) -> str:
 
     hilo = hilo_de(negocio.business_id, mensaje.de)
 
+    # El nombre sale de aturno; el del Tenant es el respaldo para cuando el
+    # backend no contesta. Un saludo con el nombre viejo es de las cosas que
+    # nadie reporta y todos notan.
+    try:
+        nombre_negocio = await aturno.nombre_visible(negocio.business_id) or negocio.nombre
+    except Exception:  # noqa: BLE001
+        nombre_negocio = negocio.nombre
+
     # Si esta persona ya dio su nombre antes, el flujo saltea ese paso. El dato
     # sale del estado guardado, no de volver a preguntarlo.
     previo = await _grafo.aget_state({"configurable": {"thread_id": hilo}})
@@ -459,7 +467,7 @@ async def _componer_respuesta(mensaje: MensajeEntrante, negocio: Tenant) -> str:
             "configurable": {
                 "thread_id": hilo,
                 "business_id": negocio.business_id,
-                "nombre_negocio": negocio.nombre,
+                "nombre_negocio": nombre_negocio,
                 "telefono": mensaje.de,
                 "nombre_cliente": conocido,
                 "calendario": calendario(),

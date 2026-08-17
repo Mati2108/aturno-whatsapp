@@ -44,6 +44,16 @@ from src.schemas import (
 class ClienteAturno(ABC):
     """Contrato común: toda implementación debe resolver estas tres preguntas."""
 
+    async def nombre_visible(self, business_id: str) -> str | None:
+        """Cómo se llama el negocio HOY, según aturno.
+
+        El nombre viaja en cada saludo, así que no puede vivir en una tabla de
+        este repo: el día que el negocio se renombra en su panel, el bot
+        seguiría saludando con el nombre viejo y nadie lo notaría hasta que un
+        cliente lo dijera. Devuelve None si no se sabe, y ahí manda el Tenant.
+        """
+        return None
+
     async def contacto(self, business_id: str) -> Contacto:
         """Cómo hablar con una persona del negocio.
 
