@@ -86,9 +86,39 @@ Hay que incluir esa instrucción en el formulario de entrega, bien visible.
 
 ### 7. Cupo de 50 mensajes por día
 
-La cuenta trial de Twilio corta a los 50 mensajes diarios. Entre pruebas y
-jurado se agota rápido, y cuando pasa el bot deja de responder sin decir nada.
-Verificar la cuenta lo levanta.
+La cuenta trial de Twilio corta a los 50 mensajes **por ventana móvil de 24
+horas** — no se repone a medianoche: cada mensaje se libera al cumplir 24h.
+
+Cuando se agota, el síntoma es el peor posible: el bot procesa todo bien y la
+persona no recibe nada. Desde afuera es indistinguible de un bot caído. Es lo
+que pasó el 17/8 con 59 mensajes en la ventana.
+
+`GET /cupo` dice cuánto margen queda antes de filmar o de mandarle el link a
+alguien, traducido a reservas completas (8 mensajes del bot cada una).
+
+Se levanta pasando la cuenta de Twilio a paga (~USD 20). Twilio avisa que
+tarda 3-4 horas en propagar, así que no dejarlo para el día de filmar.
+
+### 8. Migrar a la API de Meta — el paso que borra el costo de entrega
+
+En la Cloud API de Meta los **mensajes de servicio** (respuestas dentro de la
+ventana de 24h que abre el cliente) son ilimitados y no cuentan para ningún
+tope. Este bot no manda otra cosa: cada mensaje suyo responde a alguien que
+escribió primero. O sea que ahí el tope directamente no existe, y el costo por
+reserva baja a solo el del LLM (US$ 0,0349).
+
+No se hizo antes de la entrega a propósito: requiere cuenta de Meta Business,
+app, un número que no esté ya en WhatsApp y token permanente, más reescribir el
+adaptador de envío y la validación de firma. Nada de eso suma puntos en la
+consigna, y el número de prueba de Meta solo puede hablar con destinatarios
+pre-registrados — inservible para que un jurado lo pruebe.
+
+Se pierde el indicador de "escribiendo…": Meta no lo expone (verificado en su
+documentación). Twilio sí.
+
+Descartado en el camino: **CloudTalk**. Es un call center en la nube, no un
+proveedor de WhatsApp Business API. Conectarlo exige pegamento de terceros
+(Latenode, Pipedream), o sea una capa más que cobra y que puede fallar.
 
 ---
 
