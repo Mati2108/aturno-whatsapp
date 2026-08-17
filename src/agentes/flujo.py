@@ -420,7 +420,16 @@ async def _escalar(conv: Conversacion, cfg: dict, negocio: str,
         paso=estado.value,
         ultimo_mensaje=conv.get("mensaje") or "",
     )
-    llego = await notificar(aviso, ajustes().escalacion_webhook or None)
+    # El panel ya recibe TODOS los mensajes, y el del pedido viaja con
+    # `necesita_humano` en true. Si está configurado, el negocio se entera por
+    # ahí y no hace falta un segundo canal: dos avisos del mismo hecho son dos
+    # lugares donde mirar, y el día que discrepan nadie sabe cuál creer.
+    #
+    # `escalacion_webhook` queda para quien no tenga el panel — un negocio que
+    # quiera el aviso en Slack o en su propio sistema.
+    cfg_ = ajustes()
+    por_el_panel = bool(cfg_.panel_url and cfg_.panel_secreto)
+    llego = await notificar(aviso, cfg_.escalacion_webhook or None) or por_el_panel
     return {
         "estado": Estado.EN_MANOS_HUMANAS.value,
         "estado_previo": estado.value,
