@@ -54,6 +54,10 @@ logger = logging.getLogger("pipeline.flujo")
 
 DIAS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 
+# Cuántos mensajes seguidos sin entender antes de ofrecer una persona. Dos y
+# no tres: al tercer "no te entendí" idéntico, la gente ya se fue.
+LIMITE_SIN_ENTENDER = 2
+
 # Cuántos horarios entran en un mensaje. Veinte horarios en un celular obligan
 # a hacer scroll para elegir, y elegir es justo lo que la persona vino a hacer.
 # El resto se pide con "más" (Intencion.VER_MAS).
@@ -99,6 +103,10 @@ class Conversacion(TypedDict):
     # otro día heredaría el desplazamiento del anterior y la lista empezaría
     # por el medio sin razón visible.
     desde_horario: NotRequired[int]
+
+    # Cuántos mensajes seguidos no se entendieron. Se resetea con cualquier
+    # mensaje que sí avance o que el clasificador reconozca.
+    sin_entender: NotRequired[int]
 
     # Resultado del paso `entender`, para que `avanzar` lo lea
     intent: NotRequired[str]
@@ -214,11 +222,26 @@ async def avanzar(conv: Conversacion, config) -> dict:
             return {"desde_horario": int(conv.get("desde_horario") or 0) + PAGINA}
         return {}
 
+    if intent == Intencion.HABLAR_CON_PERSONA:
+        # No mueve el flujo ni borra nada: se contesta y la conversación queda
+        # exactamente donde estaba.
+        return {"_plantilla": "persona", "sin_entender": 0}
+
     if intent in (Intencion.DESCONOCIDO, Intencion.SALUDO):
         # Un saludo a mitad de flujo no reinicia nada: repite el pedido actual.
         if estado == Estado.APERTURA:
             return _abrir(saltear)
-        return {}
+        if intent == Intencion.SALUDO:
+            return {"sin_entender": 0}
+
+        # Dos mensajes seguidos sin entender: repetir el mismo pedido una
+        # tercera vez es la definición de callejón sin salida. A la segunda se
+        # ofrece una persona, sin que haga falta que se le ocurra pedirlo — que
+        # es justo lo que no se le ocurre a alguien que ya se está frustrando.
+        fallas = int(conv.get("sin_entender") or 0) + 1
+        if fallas >= LIMITE_SIN_ENTENDER:
+            return {"sin_entender": 0, "_plantilla": "persona"}
+        return {"sin_entender": fallas}
 
     # Primer contacto: SIEMPRE la apertura, sin importar qué haya escrito.
     # Es el requisito de que la puerta de entrada sea siempre la misma; el
@@ -247,6 +270,9 @@ async def avanzar(conv: Conversacion, config) -> dict:
 
     if estado == Estado.ESPERANDO_CONFIRMACION:
         return {**cambios, **await _reservar(conv, cambios, negocio, cfg)}
+
+    # Se entendió y avanzó: la cuenta de frustración vuelve a cero.
+    cambios["sin_entender"] = 0
 
     # Día nuevo, lista de horarios desde el principio.
     if estado == Estado.ESPERANDO_DIA:
@@ -446,6 +472,17 @@ async def responder(conv: Conversacion, config) -> dict:
         # pregunta como el problema.
         texto = datos.get("texto") or ""
         return {"respuesta": P.respuesta_info(texto) if texto else P.sin_dato()}
+
+    if especial == "persona":
+        # Si aturno no contesta, igual hay que responder algo: el pedido de
+        # hablar con alguien es el peor momento para quedarse mudo.
+        try:
+            datos_contacto = await _aturno.contacto(negocio)
+        except Exception:  # noqa: BLE001
+            logger.warning("no se pudo leer el contacto de %s", negocio, exc_info=True)
+            datos_contacto = None
+        return {"respuesta": P.hablar_con_persona(
+            cfg.get("nombre_negocio") or "el negocio", datos_contacto)}
 
     if especial == "confirmado":
         return {"respuesta": P.confirmado(

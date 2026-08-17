@@ -61,6 +61,7 @@ from src.fechas import TZ
 from src.schemas import (
     Alternativa,
     Consulta,
+    Contacto,
     DatosDelCliente,
     DiaConCupo,
     Disponibilidad,
@@ -223,6 +224,23 @@ class AturnoAPI(ClienteAturno):
         return sorted(set(horas))
 
     # ---------- la interfaz ----------
+
+    async def contacto(self, business_id: str) -> Contacto:
+        """El contacto del negocio, para derivar a una persona.
+
+        Los datos viven en dos lugares según de qué época sea el documento: la
+        raíz y `businessInfo`. Se leen los dos con `businessInfo` primero, que
+        es el orden que ya usa el panel de aturno. Leer uno solo hacía que
+        negocios viejos aparecieran sin teléfono.
+        """
+        d = await self._negocio(business_id)
+        info = d.get("businessInfo") or {}
+        elegir = lambda k: (info.get(k) or d.get(k) or None)  # noqa: E731
+        return Contacto(
+            telefono=elegir("phone"),
+            email=elegir("email"),
+            direccion=elegir("address"),
+        )
 
     async def listar_servicios(self, business_id: str) -> list[Servicio]:
         doc = await self._negocio(business_id)

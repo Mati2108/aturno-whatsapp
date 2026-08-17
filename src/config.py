@@ -82,11 +82,16 @@ def config() -> Config:
 # En producción esto sale de Firestore: cada negocio de aturno tiene su propio
 # número de WhatsApp y el webhook rutea por el campo `To`. Con el Sandbox de
 # Twilio hay un solo número, así que por ahora el mapa tiene una entrada.
+#
+# `business_id` es el SLUG de aturno: el mismo que va en la URL pública del
+# negocio y el mismo con el que se llama su archivo en `datos/`. Un solo
+# identificador para las tres cosas —la API, el RAG y el ruteo— en vez de una
+# tabla de equivalencias que después hay que mantener sincronizada.
 TENANTS: dict[str, Tenant] = {
     "+14155238886": Tenant(
-        business_id="demo-peluqueria",
-        slug="demo-peluqueria",
-        nombre="Peluquería Demo",
+        business_id="aturno",
+        slug="aturno",
+        nombre="matimatigoals",
         numero_whatsapp="+14155238886",
     ),
 }

@@ -61,6 +61,7 @@ class Intencion(str, Enum):
     VOLVER = "volver"
     CANCELAR = "cancelar"
     VER_MAS = "ver_mas"                 # más horarios
+    HABLAR_CON_PERSONA = "hablar_con_persona"   # la salida de emergencia
     DESCONOCIDO = "desconocido"
 
 

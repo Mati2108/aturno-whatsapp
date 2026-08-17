@@ -224,6 +224,7 @@ def confirmado(servicio: str, staff: str | None, dia: date, hora, codigo: str) -
         f"Código: {codigo}",
         "",
         "Si necesitás cancelar, avisame con tiempo.",
+        "Y si querés hablar con alguien del local, escribime «hablar con una persona».",
     ])
 
 
@@ -262,8 +263,49 @@ def no_disponible(motivo: MotivoNoDisponible, alternativas: list[Alternativa]) -
 # ══════════════════════════════════════════════════════════════════
 
 def error_tecnico() -> str:
-    """Nunca un stack trace ni un JSON. Esto es lo que ve una persona."""
-    return "Uy, se me complicó procesar eso. ¿Probamos de nuevo en un minuto?"
+    """Nunca un stack trace ni un JSON. Esto es lo que ve una persona.
+
+    Ofrece la persona sin ir a buscar el teléfono: este mensaje sale justo
+    cuando algo falló, y muy probablemente lo que falló sea la conexión con
+    aturno — que es de donde saldría el contacto. Pedirlo acá convertiría un
+    error en dos.
+    """
+    return (
+        "Uy, se me complicó procesar eso. ¿Probamos de nuevo en un minuto?\n\n"
+        "Si preferís, escribime «hablar con una persona»."
+    )
+
+
+def hablar_con_persona(nombre_negocio: str, contacto) -> str:
+    """La salida de emergencia. Disponible en cualquier punto del flujo.
+
+    Lo que más importa acá es la última línea. Alguien que pide hablar con una
+    persona a mitad de una reserva está a un paso de abandonar, y si además
+    sospecha que pedirlo le borra lo que venía eligiendo, no lo pide: se va. Es
+    la misma regla que el botón atrás — nada de lo elegido se pierde nunca.
+
+    Sin contacto cargado no se inventa ninguno: se dice que no lo hay.
+    """
+    if not contacto or not contacto.hay_algo():
+        return "\n".join([
+            f"No tengo un contacto cargado de {nombre_negocio} para pasarte, "
+            "así que no te quiero mandar a ningún lado.",
+            "",
+            "Tu turno queda como está. Cuando quieras seguimos.",
+        ])
+
+    lineas = [f"Te paso el contacto de {nombre_negocio}:", ""]
+    if contacto.telefono:
+        lineas.append(f"Teléfono: {contacto.telefono}")
+    if contacto.whatsapp and contacto.whatsapp != contacto.telefono:
+        lineas.append(f"WhatsApp: {contacto.whatsapp}")
+    if contacto.email:
+        lineas.append(f"Email: {contacto.email}")
+    if contacto.direccion:
+        lineas.append(f"Dirección: {contacto.direccion}")
+    lineas += ["", "No perdiste nada de lo que veníamos armando. "
+                   "Si querés seguimos por acá."]
+    return "\n".join(lineas)
 
 
 def fuera_de_alcance() -> str:

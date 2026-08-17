@@ -26,6 +26,7 @@ from src.fechas import TZ, ahora, hoy
 from src.schemas import (
     Alternativa,
     Consulta,
+    Contacto,
     DatosDelCliente,
     DiaConCupo,
     Disponibilidad,
@@ -62,6 +63,11 @@ PERSONAL_DEMO: dict[str, list[Profesional]] = {
     ],
 }
 
+CONTACTO_DEMO: dict[str, Contacto] = {
+    "demo-peluqueria": Contacto(telefono="+541130032002", direccion="Av. Siempreviva 742"),
+    "demo-consultorio": Contacto(telefono="+541130032003"),
+}
+
 # Horario por día de la semana (0=lunes … 6=domingo). None = cerrado.
 # Tiene que coincidir con el .md del negocio: si el documento del RAG y la
 # disponibilidad real se contradicen, el bot informa un horario y reserva otro.
@@ -90,6 +96,10 @@ class AturnoDoble(ClienteAturno):
         # El profesional entra en la clave: dos personas pueden atender a la
         # misma hora, que es justamente para lo que existe tener equipo.
         self._ocupados: dict[tuple[str, str, date, time], str] = {}
+
+    async def contacto(self, business_id: str) -> Contacto:
+        """Contacto de demostración, para poder probar la derivación sin red."""
+        return CONTACTO_DEMO.get(business_id, Contacto())
 
     # ---------- Catálogo ----------
 

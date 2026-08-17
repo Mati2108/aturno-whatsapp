@@ -31,6 +31,7 @@ from datetime import date, time
 
 from src.schemas import (
     Consulta,
+    Contacto,
     DatosDelCliente,
     DiaConCupo,
     Disponibilidad,
@@ -42,6 +43,17 @@ from src.schemas import (
 
 class ClienteAturno(ABC):
     """Contrato común: toda implementación debe resolver estas tres preguntas."""
+
+    async def contacto(self, business_id: str) -> Contacto:
+        """Cómo hablar con una persona del negocio.
+
+        No es abstracto y devuelve vacío por defecto a propósito: una
+        implementación que no lo resuelva sigue siendo válida, y el bot ya sabe
+        qué contestar cuando no hay contacto cargado. Hacerlo obligatorio
+        rompería toda implementación existente para agregar un dato que puede
+        faltar legítimamente.
+        """
+        return Contacto()
 
     @abstractmethod
     async def listar_servicios(self, business_id: str) -> list[Servicio]:

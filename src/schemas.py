@@ -68,6 +68,23 @@ class MensajeEntrante(BaseModel):
 
 # ---------- Lo que el bot lee de aturno ----------
 
+class Contacto(BaseModel):
+    """Cómo se llega a una persona de carne y hueso en este negocio.
+
+    Todos los campos son opcionales porque un negocio puede no haber cargado
+    ninguno, y en ese caso el bot tiene que decir eso y no un teléfono
+    inventado. `hay_algo()` es lo que decide si se puede derivar.
+    """
+
+    telefono: str | None = None
+    whatsapp: str | None = None
+    email: str | None = None
+    direccion: str | None = None
+
+    def hay_algo(self) -> bool:
+        return bool(self.telefono or self.whatsapp or self.email)
+
+
 class Servicio(BaseModel):
     """Un servicio que ofrece el negocio. Espejo de lo que devuelve aturno."""
 
