@@ -43,16 +43,32 @@ from src.agentes.estados import (
     Intencion,
     anterior,
     numero_elegido,
+    respuesta_fija,
     siguiente,
 )
 from src.aturno.base import ClienteAturno
 from src.fechas import hoy as hoy_del_negocio
 from src.rag.indice import Recuperador, abrir_indice
-from src.schemas import Alternativa, DatosDelCliente, MotivoNoDisponible
+from src.schemas import (
+    Alternativa,
+    DatosDelCliente,
+    MotivoNoDisponible,
+    limpiar_nombre,
+)
 
 logger = logging.getLogger("pipeline.flujo")
 
 DIAS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+
+# Hasta dónde se lee un mensaje. Un pedido de turno real no pasa de dos
+# renglones; lo que venga después es ruido, y ese ruido se paga: cada carácter
+# entra al prompt del clasificador. Sin tope, alguien puede mandar diez mil
+# caracteres y hacerle gastar plata al negocio sin sacar ningún turno.
+#
+# Se recorta en vez de rechazar porque la intención suele estar al principio:
+# quien pega un texto largo igual escribió "quiero un turno" en la primera
+# línea, y rechazarlo lo dejaría sin respuesta por algo que se entendía.
+MAX_MENSAJE = 400
 
 # Cuántos mensajes seguidos sin entender antes de ofrecer una persona. Dos y
 # no tres: al tercer "no te entendí" idéntico, la gente ya se fue.
@@ -149,8 +165,21 @@ async def entender(conv: Conversacion, config) -> dict:
             "entidades": {"_indice": indice},
         }
 
+    # Las frases de siempre ("dale", "me da igual", "hablar con alguien") no
+    # necesitan al modelo: significan lo mismo todas las veces. Cada una que se
+    # resuelve acá ahorra la llamada ENTERA, que son ~1.677 tokens de entrada
+    # aunque el mensaje sean tres letras.
+    fija = respuesta_fija(texto, estado)
+    if fija is not None:
+        intencion, entidades = fija
+        logger.info("«%s» → %s (frase fija, sin LLM)", texto[:24], intencion.value)
+        return {**limpio_turno, "intent": intencion.value, "entidades": entidades}
+
     cfg = (config.get("configurable") or {})
     hoy = hoy_del_negocio()
+    if len(texto) > MAX_MENSAJE:
+        logger.info("mensaje de %d caracteres recortado a %d", len(texto), MAX_MENSAJE)
+        texto = texto[:MAX_MENSAJE]
     resultado: Clasificacion = await clasificar(
         _clasificador, texto, estado, opciones,
         hoy.isoformat(), DIAS_ES[hoy.weekday()], cfg.get("calendario", ""),
@@ -365,7 +394,10 @@ async def _resolver(
         return None
 
     if estado == Estado.ESPERANDO_NOMBRE:
-        return {"nombre": ent["nombre"]} if ent.get("nombre") else None
+        # Limpio ya acá, no solo al reservar: si no, el resumen le muestra a la
+        # persona un nombre distinto del que se va a guardar.
+        limpio = limpiar_nombre(ent.get("nombre") or "")
+        return {"nombre": limpio} if len(limpio) >= 2 else None
 
     if estado == Estado.ESPERANDO_CONFIRMACION:
         return {}

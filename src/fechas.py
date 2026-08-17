@@ -44,7 +44,7 @@ def hoy() -> date:
     return ahora().date()
 
 
-def calendario(desde: date | None = None, dias: int = 10) -> str:
+def calendario(desde: date | None = None, dias: int = 8) -> str:
     """La tabla de fechas ya resueltas que viaja en el prompt del clasificador.
 
     El modelo no calcula: busca en esta tabla. Convertir "el jueves" a una

@@ -68,6 +68,35 @@ class MensajeEntrante(BaseModel):
 
 # ---------- Lo que el bot lee de aturno ----------
 
+_ETIQUETAS = re.compile(r"<[^>]*>")
+_LINK_MD = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_URL = re.compile(r"https?://\S+|www\.\S+", re.I)
+_ESPACIOS = re.compile(r"\s+")
+
+
+def limpiar_nombre(valor: str) -> str:
+    """Deja un nombre de persona, no lo que haya escrito.
+
+    Existe por dónde TERMINA este dato. En aturno, el nombre del cliente se
+    interpola sin escapar dentro del mail HTML que recibe el dueño del negocio
+    (`emailService.js`, en el cuerpo y en el asunto). O sea que quien escribe
+    por WhatsApp puede meterle formato y links a un mail que el dueño abre
+    confiado porque lo estaba esperando.
+
+    El arreglo de fondo va allá: escapar al escribir el mail protege también al
+    formulario de la web, que tiene el mismo agujero desde antes que este bot
+    existiera. Esto es la otra mitad — no dejar entrar por acá lo que no
+    debería llegar nunca. Las dos cosas, no una.
+
+    Se sacan etiquetas, links de markdown y URLs; se conserva todo lo que
+    aparece en un nombre real: acentos, apóstrofos, guiones y puntos.
+    """
+    limpio = _LINK_MD.sub(r"\1", valor or "")
+    limpio = _ETIQUETAS.sub(" ", limpio)
+    limpio = _URL.sub(" ", limpio)
+    return _ESPACIOS.sub(" ", limpio).strip()
+
+
 class Contacto(BaseModel):
     """Cómo se llega a una persona de carne y hueso en este negocio.
 
@@ -200,6 +229,24 @@ class DatosDelCliente(BaseModel):
     nombre: str | None = Field(default=None, min_length=2, max_length=80)
     telefono: str = Field(min_length=8)
     email: str | None = None
+
+    @field_validator("nombre", mode="before")
+    @classmethod
+    def _solo_un_nombre(cls, valor):
+        """Se limpia acá y no en el flujo: es el único paso obligado.
+
+        Cualquier camino que termine en una reserva construye este objeto, así
+        que poner la limpieza en el esquema hace imposible que un nombre sin
+        limpiar llegue a aturno — aunque mañana aparezca otra forma de tomarlo.
+        Un `.strip()` suelto en el nodo que hoy lo pide se olvida en el que se
+        agregue después.
+        """
+        if not isinstance(valor, str):
+            return valor
+        limpio = limpiar_nombre(valor)
+        # Si lo que quedó no alcanza para ser un nombre, se descarta entero y
+        # el flujo vuelve a preguntarlo. Guardar el resto sería peor.
+        return limpio[:80] if len(limpio) >= 2 else None
 
     def esta_completo(self) -> bool:
         """Con nombre y teléfono alcanza para reservar; el email es opcional."""

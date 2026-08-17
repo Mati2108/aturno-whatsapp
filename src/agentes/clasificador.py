@@ -33,28 +33,33 @@ logger = logging.getLogger("pipeline.clasificador")
 
 
 class Entidades(BaseModel):
-    """Los datos que el mensaje pueda traer. Todos opcionales."""
+    """Los datos que el mensaje pueda traer. Todos opcionales.
 
-    servicio: str | None = Field(default=None, description="Nombre del servicio mencionado.")
-    profesional: str | None = Field(
-        default=None, description="Nombre de la persona. 'cualquiera' si le da igual."
-    )
-    fecha: str | None = Field(default=None, description="Fecha en AAAA-MM-DD.")
-    hora: str | None = Field(default=None, description="Hora en HH:MM, 24 horas.")
-    nombre: str | None = Field(default=None, description="Nombre de la persona que escribe.")
-    consulta: str | None = Field(
-        default=None, description="Si pregunta algo del negocio, qué preguntó."
-    )
+    Sin `description` en los campos a propósito. El esquema de esta clase viaja
+    ENTERO en cada llamada —medido: 1.205 de los 1.677 tokens de entrada, el
+    72%— y cada descripción se paga en todas. Lo que decían está en
+    INSTRUCCIONES, que se manda igual: describirlo dos veces es pagarlo dos
+    veces. Los nombres de los campos alcanzan para que el modelo sepa qué poner.
+    """
+
+    servicio: str | None = None
+    profesional: str | None = None
+    fecha: str | None = None          # AAAA-MM-DD
+    hora: str | None = None           # HH:MM
+    nombre: str | None = None
+    consulta: str | None = None
 
 
 class Clasificacion(BaseModel):
-    """Lo único que el modelo puede devolver."""
+    """Lo único que el modelo puede devolver.
+
+    `needs_clarification` estaba acá y no lo leía nadie: el flujo ya sabe qué
+    hacer con DESCONOCIDO. Un campo que no se usa igual se paga en tokens en
+    cada llamada, así que se fue.
+    """
 
     intent: Intencion
     entities: Entidades = Field(default_factory=Entidades)
-    needs_clarification: bool = Field(
-        default=False, description="True si el mensaje es demasiado ambiguo."
-    )
 
 
 INSTRUCCIONES = """\
@@ -68,6 +73,7 @@ Hoy es {hoy} ({dia_semana}).
 {calendario}
 
 Reglas de extracción:
+- fecha en AAAA-MM-DD, hora en HH:MM de 24 horas.
 - "mañana" sola es el DÍA DE MAÑANA. "a la mañana" es la franja horaria.
 - Convertí los días a AAAA-MM-DD usando la tabla de arriba, no calcules.
 - "cualquiera", "me da igual", "el que sea" -> profesional: "cualquiera".

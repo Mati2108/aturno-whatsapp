@@ -24,6 +24,8 @@ Un "3" no cuesta un token. La mayoría de los mensajes de este flujo son "3".
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from enum import Enum
 
 
@@ -118,6 +120,82 @@ def anterior(actual: Estado, saltear: set[Estado] | None = None) -> Estado:
     while indice > 0 and ORDEN[indice] in saltear:
         indice -= 1
     return ORDEN[max(indice, 0)]
+
+
+def _normalizar(texto: str) -> str:
+    """Minúsculas, sin acentos y sin signos. Para comparar frases fijas."""
+    sin_acentos = unicodedata.normalize("NFD", texto.lower())
+    sin_acentos = "".join(c for c in sin_acentos if unicodedata.category(c) != "Mn")
+    return re.sub(r"[^\w\s]", "", sin_acentos).strip()
+
+
+# Frases que siempre significan lo mismo, en el paso donde significan eso.
+#
+# POR QUÉ ESTÁ ESTA TABLA
+# Cada llamada al modelo cuesta ~1.677 tokens de entrada, y el 72% de eso es el
+# esquema de la salida estructurada, que viaja igual aunque la respuesta sea
+# "sí". Mandar "dale" al modelo para que conteste `confirmar` es pagar 1.677
+# tokens por algo que una comparación de texto resuelve exacto.
+#
+# La tabla es CERRADA y por paso a propósito. "Sí" solo se interpreta como
+# confirmar cuando la pregunta fue "¿confirmo?"; en cualquier otro paso, al
+# modelo, que tiene el contexto. Un atajo que adivina de más es peor que no
+# tenerlo: se equivoca en silencio y sin forma de notarlo.
+ATAJOS: dict[Estado | None, dict[frozenset[str], Intencion]] = {
+    Estado.ESPERANDO_CONFIRMACION: {
+        frozenset({"si", "sisi", "si si", "dale", "ok", "oka", "okey", "listo",
+                   "confirmo", "confirma", "confirmalo", "confirmar", "perfecto",
+                   "obvio", "claro", "de una", "vale", "correcto", "asi es",
+                   "esta bien", "si por favor", "si porfa", "genial", "buenisimo"}):
+            Intencion.CONFIRMAR,
+    },
+    Estado.ESPERANDO_STAFF: {
+        frozenset({"me da igual", "da igual", "cualquiera", "el que sea",
+                   "la que sea", "cualquier", "no tengo preferencia", "indistinto",
+                   "cualquier persona", "me es indiferente", "no importa"}):
+            Intencion.ELEGIR_STAFF,
+    },
+    # Sin paso: valen en cualquier momento de la conversación.
+    None: {
+        frozenset({"hola", "buenas", "buen dia", "buenas tardes", "buenas noches",
+                   "hey", "holis", "que tal", "hola buenas", "buenass"}):
+            Intencion.SALUDO,
+        frozenset({"gracias", "muchas gracias", "mil gracias", "genial gracias",
+                   "dale gracias", "perfecto gracias"}):
+            Intencion.SALUDO,
+        frozenset({"quiero hablar con una persona", "hablar con una persona",
+                   "con una persona", "quiero hablar con alguien",
+                   "hablar con alguien", "un humano", "una persona",
+                   "pasame con alguien", "quiero un humano",
+                   "atencion humana", "hablar con un humano"}):
+            Intencion.HABLAR_CON_PERSONA,
+        frozenset({"cancelar", "cancela", "cancelalo", "cancelar todo",
+                   "dejalo", "no importa dejalo", "olvidalo"}):
+            Intencion.CANCELAR,
+        frozenset({"mas", "mas horarios", "otro horario", "otros horarios",
+                   "mas tarde", "mostrame mas", "ver mas"}):
+            Intencion.VER_MAS,
+    },
+}
+
+
+def respuesta_fija(texto: str, estado: Estado) -> tuple[Intencion, dict] | None:
+    """La intención, si el mensaje es una de las frases de siempre. Sin LLM.
+
+    Devuelve también las entidades que la frase implica, para que el resto del
+    flujo no tenga que saber que esto pasó por un atajo.
+    """
+    limpio = _normalizar(texto)
+    if not limpio or len(limpio) > 40:      # una frase fija no es un párrafo
+        return None
+
+    for paso in (estado, None):
+        for frases, intencion in ATAJOS.get(paso, {}).items():
+            if limpio in frases:
+                entidades = ({"profesional": "cualquiera"}
+                             if intencion == Intencion.ELEGIR_STAFF else {})
+                return intencion, entidades
+    return None
 
 
 def numero_elegido(texto: str, cantidad: int) -> int | None:
