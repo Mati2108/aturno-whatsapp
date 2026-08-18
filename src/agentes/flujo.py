@@ -287,8 +287,19 @@ async def avanzar(conv: Conversacion, config) -> dict:
 
     if intent == Intencion.CONSULTAR_INFO:
         consulta = ent.get("consulta") or conv["mensaje"]
-        return {"_plantilla": "info",
-                "_datos": {"texto": await _rag(negocio).contexto(consulta)}}
+        # Si la búsqueda falla, la respuesta es "no lo tengo", no un error.
+        #
+        # Pasó de verdad: se agotó la cuota diaria de embeddings (1.000 por
+        # día en el plan gratuito) y la excepción subía hasta arriba, así que
+        # CUALQUIER pregunta contestaba "se me complicó procesar eso". El
+        # proveedor de embeddings caído no es algo que la persona pueda
+        # arreglar ni entender; que el bot no sepa un dato, sí.
+        try:
+            texto = await _rag(negocio).contexto(consulta)
+        except Exception:  # noqa: BLE001
+            logger.warning("la búsqueda falló para %s", negocio, exc_info=True)
+            texto = ""
+        return {"_plantilla": "info", "_datos": {"texto": texto}}
 
     if intent == Intencion.VOLVER:
         return {"estado": anterior(estado, saltear).value}

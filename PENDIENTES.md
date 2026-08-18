@@ -256,6 +256,34 @@ bot dice que se puede hacer por WhatsApp, en vez de mandar un link roto.
 
 ---
 
+## 🟠 Un techo que todavía no se ve
+
+### La cuota de embeddings: 1.000 preguntas por día, en total
+
+El plan gratuito de Gemini permite **1.000 pedidos de embedding por día**, y
+cada pregunta de información gasta uno. No es por negocio: es del proyecto
+entero, así que se reparte entre todos los clientes.
+
+Se alcanzó el 17/8/2026 probando, y el síntoma fue confuso: dos suites en rojo
+que parecían un bug del código.
+
+Lo que ya está resuelto de este lado:
+
+- Si la búsqueda falla, el bot dice **"ese dato no lo tengo cargado"** en vez
+  de "se me complicó procesar eso". Un proveedor caído no es algo que la
+  persona pueda entender ni arreglar; que el bot no sepa algo, sí.
+- `test_aislamiento.py` distingue **"no se pudo verificar"** de **"falló"**.
+  Confundirlos es peligroso: algún día alguien va a ver rojo, asumir que es la
+  cuota, y va a estar mirando una filtración real entre negocios.
+
+Lo que falta decidir, antes de tener volumen:
+
+- Pasar a plan pago de Gemini, o
+- Volver al modelo local (`EMBEDDINGS_MODO=local`), que no tiene cuota pero
+  suma 805 MB al proceso — medido, y no entra en un plan chico, o
+- Cachear los embeddings de las preguntas frecuentes: las mismas cinco
+  preguntas se repiten todo el día y hoy cada una se paga entera.
+
 ## 🟢 Mejoras del bot
 
 Salieron de usarlo, no de imaginarlo.

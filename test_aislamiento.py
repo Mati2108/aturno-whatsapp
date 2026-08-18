@@ -50,7 +50,23 @@ def chequear(nombre: str, cond: bool, detalle: str = "") -> None:
     print(f"  {'✓' if cond else '✗'} {nombre}" + (f"  ({detalle})" if detalle else ""))
 
 
+class SinCuota(Exception):
+    """El proveedor de embeddings no contesta. NO es una falla de aislamiento."""
+
+
+def _es_falta_de_cuota(e: Exception) -> bool:
+    texto = str(e)
+    return "RESOURCE_EXHAUSTED" in texto or "429" in texto
+
+
 async def main() -> None:
+    """Verifica que ningún negocio pueda ver los datos de otro.
+
+    Si el proveedor de embeddings no responde, esto NO dice "falla": dice que
+    no se pudo verificar. Son cosas distintas y confundirlas es peligroso — un
+    día alguien va a ver rojo, asumir que es la cuota otra vez, y va a estar
+    mirando una filtración real entre clientes.
+    """
     indice = abrir_indice()
     r = {
         PELUQUERIA: Recuperador(PELUQUERIA, indice),
@@ -101,5 +117,19 @@ async def main() -> None:
     raise SystemExit(0 if ok else 1)
 
 
+async def _correr() -> None:
+    try:
+        await main()
+    except Exception as e:  # noqa: BLE001
+        if not _es_falta_de_cuota(e):
+            raise
+        print(f"\n{'=' * 62}")
+        print("  NO SE PUDO VERIFICAR — el proveedor de embeddings sin cuota")
+        print("  (1.000 pedidos por día en el plan gratuito de Gemini)")
+        print("  El aislamiento no falló: no se llegó a probar.")
+        print(f"{'=' * 62}\n")
+        raise SystemExit(2) from None
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(_correr())
