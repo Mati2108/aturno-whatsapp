@@ -346,6 +346,18 @@ async def avanzar(conv: Conversacion, config) -> dict:
     if estado == Estado.APERTURA:
         return await _abrir(saltear, negocio)
 
+    # Un nombre escrito en la confirmación corrige el nombre y se queda ahí.
+    #
+    # Sin esto caía en "volver a un paso anterior": lo mandaba al paso del
+    # nombre y le pedía el nombre que acababa de escribir. Corregir un dato
+    # que está a la vista no puede costar dos mensajes y perder el resumen.
+    if estado == Estado.ESPERANDO_CONFIRMACION and intent == Intencion.DAR_NOMBRE:
+        limpio = limpiar_nombre(ent.get("nombre") or "")
+        if len(limpio) >= 2:
+            logger.info("nombre corregido en la confirmación: %s", limpio)
+            return {"nombre": limpio, "sin_entender": 0}
+        return {}
+
     # ---- ¿Quiere volver a un paso anterior? ----
     paso = PASO_DE.get(intent)
     if paso and paso in ORDEN and estado in ORDEN:
@@ -863,10 +875,15 @@ async def _pedir_paso(conv: Conversacion, cfg: dict, negocio: str,
         if conv.get("profesional_id"):
             gente = await _aturno.listar_personal(negocio)
             quien = next((p.nombre for p in gente if p.id == conv["profesional_id"]), None)
-        return {"respuesta": P.resumen(nombre_svc, quien,
-                                       date.fromisoformat(conv["fecha"]),
-                                       datetime.strptime(conv["hora"], "%H:%M").time()),
-                "opciones": ["sí", "no"]}
+        return {
+            "respuesta": P.resumen(
+                nombre_svc, quien,
+                date.fromisoformat(conv["fecha"]),
+                datetime.strptime(conv["hora"], "%H:%M").time(),
+                conv.get("nombre") or cfg.get("nombre_cliente"),
+            ),
+            "opciones": ["sí", "no"],
+        }
 
     return {"respuesta": P.error_tecnico(), "opciones": []}
 

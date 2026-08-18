@@ -295,16 +295,32 @@ def lista_horarios(dia: date, horarios: list, maximo: int = 8) -> str:
 # T6 · Resumen y T7 · Nombre
 # ══════════════════════════════════════════════════════════════════
 
-def resumen(servicio: str, staff: str | None, dia: date, hora) -> str:
-    lineas = ["Repasemos:", "", f"Servicio: {servicio}"]
+def resumen(servicio: str, staff: str | None, dia: date, hora,
+            cliente: str | None = None) -> str:
+    """Todo lo que se va a reservar, incluido A NOMBRE DE QUIÉN.
+
+    El nombre faltaba, y es el dato más fácil de que esté mal sin que nadie se
+    entere. Un teléfono lo comparte una familia: la primera vez lo saca la
+    madre, y la segunda el bot saltea el paso del nombre —porque ya lo
+    recuerda— y le reserva al hijo un turno a nombre de ella. Nadie lo nota
+    hasta que llega al mostrador.
+
+    Mostrarlo es la mitad; la otra es poder corregirlo sin volver atrás, y por
+    eso la línea de abajo dice cómo.
+    """
+    lineas = ["Repasemos:", ""]
+    if cliente:
+        lineas.append(f"Para: {cliente}")
+    lineas.append(f"Servicio: {servicio}")
     if staff:
         lineas.append(f"Con: {staff}")
-    lineas += [
-        f"Día: {_dia_corto(dia)}",
-        f"Hora: {hora:%H:%M}",
-        "",
-        "¿Confirmo? Respondé SÍ o NO.",
-    ]
+    lineas += [f"Día: {_dia_corto(dia)}", f"Hora: {hora:%H:%M}", ""]
+
+    if cliente:
+        lineas.append("¿Confirmo? Respondé SÍ.")
+        lineas.append("Si el turno es para otra persona, escribime su nombre.")
+    else:
+        lineas.append("¿Confirmo? Respondé SÍ o NO.")
     return "\n".join(lineas)
 
 
