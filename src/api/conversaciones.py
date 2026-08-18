@@ -53,6 +53,20 @@ class MensajeDelPanel(BaseModel):
     autor: str | None = Field(default=None, description="Quién del negocio contestó.")
 
 
+class PedidoDeReindexado(BaseModel):
+    """Solo el negocio. Nada más hace falta para volver a leer su conocimiento.
+
+    Modelo propio y no `MensajeDelPanel`: ese exige un teléfono de ocho
+    caracteres porque manda un mensaje a alguien, y acá no hay nadie a quien
+    mandarle nada. Reusarlo obligaba al backend a inventar un teléfono falso
+    para pasar la validación — y como no lo inventaba, el reindexado devolvía
+    422 y no se reindexaba nunca. Un endpoint que exige un dato que no usa es
+    un endpoint que va a fallar el día que alguien lo llame bien.
+    """
+
+    business_id: str = Field(min_length=1)
+
+
 class Enviado(BaseModel):
     """La respuesta del bot al panel."""
 

@@ -40,6 +40,7 @@ from src.api.conversaciones import (
     Enviado,
     EventoDeConversacion,
     MensajeDelPanel,
+    PedidoDeReindexado,
     _secreto_valido,
     avisar_a_aturno,
     evento,
@@ -451,7 +452,7 @@ async def tomar_desde_el_panel(
 
 @app.post("/panel/reindexar", response_model=Enviado)
 async def reindexar_desde_el_panel(
-    mensaje: MensajeDelPanel,
+    mensaje: PedidoDeReindexado,
     x_panel_secret: str = Header(default=""),
 ) -> Enviado:
     """El negocio contestó el formulario: el bot vuelve a leer lo que sabe.
