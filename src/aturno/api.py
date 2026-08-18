@@ -589,6 +589,60 @@ class AturnoAPI(ClienteAturno):
                     elegido.nombre, len(disponibles))
         return elegido.id
 
+    async def _donde_atiende(self, slug: str, servicio: dict, dia: date,
+                             hora: time) -> dict | None:
+        """El lugar donde se da el turno: id y nombre, o None si no hay.
+
+        Mismo problema que tenía el profesional: se mandaba `resource: null` y
+        el turno quedaba sin lugar asignado. Con un solo local no se nota; con
+        dos consultorios o dos sillones, el negocio no sabe cuál reservó.
+
+        NO se usa `availableResources` de `check-availability`, que sería lo
+        natural: ese campo viene siempre vacío porque el backend lo calcula
+        leyendo `serviceData.resources` y el campo real se llama
+        `assignedResources` (aturno, server.js). Está anotado en PENDIENTES;
+        mientras tanto se resuelve acá, igual que lo hace la página pública.
+
+        El sorteo es por lo mismo que en el profesional: con dos lugares
+        libres, "el primero" haría que uno se use siempre y el otro nunca.
+        """
+        doc = await self._negocio(slug)
+        activos = [r for r in (doc.get("resources") or []) if r.get("active")]
+        if not activos:
+            return None
+
+        # `assignedResources` es el nombre en los datos; `assignedLocation` es
+        # el que lee el frontend. Se miran los dos: cuál esté cargado depende
+        # de la época del documento, y leer uno solo deja negocios sin lugar.
+        asignados = servicio.get("assignedResources") or servicio.get("assignedLocation")
+        if asignados:
+            activos = [r for r in activos if str(r.get("id")) in map(str, asignados)]
+        if not activos:
+            return None
+
+        # Los que trabajan ese día a esa hora, según su propio horario.
+        del_dia = DIAS_JS[dia.weekday()]
+        minutos = hora.hour * 60 + hora.minute
+        sirven = []
+        for r in activos:
+            agenda = (r.get("schedule") or {}).get(del_dia) or {}
+            if not agenda.get("enabled"):
+                continue
+            if any(_a_minutos(x["start"]) <= minutos < _a_minutos(x["end"])
+                   for x in (agenda.get("ranges") or [])):
+                sirven.append(r)
+
+        # Sin horario propio cargado no se descarta: un recurso sin agenda es
+        # "está siempre", que es lo que pasa con un local. Descartarlo dejaría
+        # sin lugar a la mayoría de los negocios, que nunca lo configuran.
+        if not sirven:
+            sirven = [r for r in activos if not (r.get("schedule") or {})]
+        if not sirven:
+            return None
+
+        elegido = random.choice(sirven)
+        return {"id": elegido.get("id"), "name": elegido.get("name")}
+
     async def crear_turno(self, business_id: str, servicio_id: str, dia: date,
                           hora: time, cliente: DatosDelCliente,
                           profesional_id: str | None = None) -> TurnoConfirmado:
@@ -631,6 +685,9 @@ class AturnoAPI(ClienteAturno):
             # dónde venga la reserva. Mandamos el plano, que es el que usa la
             # reserva sin seña — el mismo camino que recorre este bot.
             "staff": None,
+            # El lugar, resuelto igual que el profesional. Sin esto el turno
+            # entra sin local asignado y el negocio no sabe dónde atenderlo.
+            "resource": await self._donde_atiende(business_id, servicio, dia, hora),
             "clientTimeZone": str(TZ),
             # De dónde salió el turno. El negocio lo ve en su panel y es lo que
             # le permite medir si el canal de WhatsApp le sirve.

@@ -130,7 +130,27 @@ El adaptador funciona igual contra un backend viejo: si falta
 `/horarios-ocupados`, pregunta horario por horario con `check-availability`
 (concurrencia limitada a 6).
 
-#### Bug encontrado EN ATURNO, todavía sin arreglar
+#### Bugs encontrados EN ATURNO
+
+##### `availableResources` viene siempre vacío
+
+`check-availability` calcula los recursos libres leyendo el campo equivocado:
+
+```js
+if (available && Array.isArray(serviceData.resources) && ...)   // server.js
+```
+
+El campo se llama **`assignedResources`**, no `resources`. Así que ese arreglo
+sale vacío siempre, aunque el turno esté disponible y el recurso libre.
+
+Es el mismo tipo de error que ya está documentado con el profesional, que se
+leía con dos nombres según de dónde viniera la reserva. Acá nadie lo notó
+porque el frontend resuelve el recurso por su cuenta antes de reservar.
+
+No molesta hoy —el bot también lo resuelve solo— pero cualquiera que use ese
+campo va a creer que no hay recursos disponibles nunca.
+
+##### El huso horario en la gestión por código
 
 Los tres endpoints públicos con los que un cliente gestiona su turno arman la
 fecha sin offset horario:
