@@ -695,11 +695,15 @@ async def _procesar_y_responder(
     # Se avisa DESPUÉS de procesar y antes de enviar, para que el orden en el
     # panel sea el mismo que en el chat.
     estado_ahora = None
+    nombre_dado = None
     if _grafo is not None:
         try:
             st = await _grafo.aget_state(
                 {"configurable": {"thread_id": hilo_de(negocio.business_id, mensaje.de)}})
             estado_ahora = (st.values or {}).get("estado")
+            # Sale de la misma lectura que ya se hacía: pedirlo aparte sería
+            # una consulta más por mensaje para un dato que ya está en la mano.
+            nombre_dado = (st.values or {}).get("nombre")
         except Exception:  # noqa: BLE001
             pass
 
@@ -707,6 +711,7 @@ async def _procesar_y_responder(
     await avisar_a_aturno(evento(
         negocio.business_id, mensaje.de, mensaje.texto, de_quien="cliente",
         necesita_humano=en_manos, en_manos_humanas=en_manos, paso=estado_ahora,
+        nombre=nombre_dado,
     ))
 
     # Un texto vacío es el bot callándose a propósito: la conversación está en
@@ -717,7 +722,8 @@ async def _procesar_y_responder(
 
     _enviar(mensaje.de, negocio, texto)
     await avisar_a_aturno(evento(
-        negocio.business_id, mensaje.de, texto, de_quien="bot", paso=estado_ahora))
+        negocio.business_id, mensaje.de, texto, de_quien="bot", paso=estado_ahora,
+        nombre=nombre_dado))
 
 
 async def _componer_respuesta(mensaje: MensajeEntrante, negocio: Tenant) -> str:

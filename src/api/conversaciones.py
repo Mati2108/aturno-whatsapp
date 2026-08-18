@@ -83,6 +83,10 @@ class EventoDeConversacion(BaseModel):
     # bot la retoma. El botón para devolverla depende de ESTE.
     en_manos_humanas: bool = False
     paso: str | None = None
+    # El nombre que la persona dio en la conversación, si llegó a darlo. El
+    # panel lista teléfonos, y un teléfono no le dice nada a nadie: el dueño
+    # tiene que abrir la conversación para saber a quién está por contestarle.
+    nombre: str | None = None
 
 
 def _secreto_valido(recibido: str | None) -> bool:
@@ -127,7 +131,8 @@ async def avisar_a_aturno(evento: EventoDeConversacion) -> bool:
 
 def evento(business_id: str, telefono: str, texto: str, *, de_quien: str,
            necesita_humano: bool = False, en_manos_humanas: bool = False,
-           paso: str | None = None) -> EventoDeConversacion:
+           paso: str | None = None,
+           nombre: str | None = None) -> EventoDeConversacion:
     """Arma el evento.
 
     `de_quien` es 'cliente', 'bot', 'negocio' o 'sistema'. Los tres primeros
@@ -145,4 +150,5 @@ def evento(business_id: str, telefono: str, texto: str, *, de_quien: str,
         necesita_humano=necesita_humano,
         en_manos_humanas=en_manos_humanas,
         paso=paso,
+        nombre=nombre,
     )
