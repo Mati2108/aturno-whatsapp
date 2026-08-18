@@ -61,6 +61,7 @@ from src.schemas import (
     Alternativa,
     DatosDelCliente,
     MotivoNoDisponible,
+    SinLugar,
     limpiar_nombre,
 )
 
@@ -340,6 +341,10 @@ async def avanzar(conv: Conversacion, config) -> dict:
     resuelto = await _resolver(estado, conv, ent, negocio, cfg)
     if resuelto is None:
         return {}  # no se pudo resolver: se repite el pedido
+    if "_rechazo" in resuelto:
+        # Pidió algo que no está disponible. NO avanza: se explica el motivo y
+        # se ofrecen las opciones cercanas, en el mismo paso.
+        return {"_plantilla": "no_disponible", "_datos": resuelto["_rechazo"]}
     cambios.update(resuelto)
 
     if estado == Estado.ESPERANDO_CONFIRMACION:
@@ -490,11 +495,24 @@ async def _resolver(
         return {"profesional_id": candidatos[0]} if len(candidatos) == 1 else None
 
     if estado == Estado.ESPERANDO_DIA:
-        dias = P.dias_elegibles(await _cupos(conv, negocio))
+        cupos = await _cupos(conv, negocio)
+        dias = P.dias_elegibles(cupos)
         if indice is not None and indice < len(dias):
             return {"fecha": dias[indice].fecha.isoformat()}
         if ent.get("fecha"):
-            return {"fecha": ent["fecha"]}
+            # Lo que sacó el modelo NO se guarda sin verificar que exista.
+            # Se aceptaba tal cual, así que pedir un día cerrado o completo
+            # avanzaba el flujo igual y el problema recién aparecía al final.
+            pedida = ent["fecha"]
+            if any(d.fecha.isoformat() == pedida for d in dias):
+                return {"fecha": pedida}
+            elegido = next((c for c in cupos if c.fecha.isoformat() == pedida), None)
+            return {"_rechazo": {
+                "motivo": (MotivoNoDisponible.CERRADO
+                           if elegido is None or elegido.motivo == SinLugar.CERRADO
+                           else MotivoNoDisponible.OCUPADO).value,
+                "alternativas": [],
+            }}
         return None
 
     if estado == Estado.ESPERANDO_HORARIO:
@@ -507,8 +525,35 @@ async def _resolver(
         mostradas = conv.get("opciones") or []
         if indice is not None and indice < len(mostradas):
             return {"hora": mostradas[indice]}
+
         if ent.get("hora"):
-            return {"hora": ent["hora"]}
+            # La hora que extrae el modelo se VERIFICA contra los horarios
+            # libres. Antes se guardaba tal cual: alguien escribía "9:39" —una
+            # hora que no existe en la grilla— y el bot la aceptaba, la ponía
+            # en el resumen y la reservaba. Confirmar un turno a una hora que
+            # nunca se ofreció es lo peor que puede hacer este sistema: la
+            # persona se presenta cuando no la esperan.
+            pedida = ent["hora"]
+            libres = await _horarios(conv, negocio)
+            if any(h.strftime("%H:%M") == pedida for h in libres):
+                return {"hora": pedida}
+
+            # No está. Se dice por qué y qué hay cerca, que es para lo que
+            # existe `consultar_pedido`.
+            try:
+                dia = date.fromisoformat(conv["fecha"])
+                reloj = datetime.strptime(pedida, "%H:%M").time()
+            except (ValueError, KeyError, TypeError):
+                return None
+            consulta = await _aturno.consultar_pedido(
+                negocio, conv["servicio_id"], dia, reloj, conv.get("profesional_id"))
+            return {"_rechazo": {
+                "motivo": (consulta.motivo or MotivoNoDisponible.FUERA_DE_HORARIO).value,
+                "pedida": pedida,
+                "alternativas": [{"fecha": a.fecha.isoformat(),
+                                  "hora": a.hora.strftime("%H:%M")}
+                                 for a in consulta.alternativas[:3]],
+            }}
         return None
 
     if estado == Estado.ESPERANDO_NOMBRE:
@@ -680,7 +725,7 @@ async def responder(conv: Conversacion, config) -> dict:
                             hora=datetime.strptime(a["hora"], "%H:%M").time(),
                             distancia_minutos=0) for a in datos.get("alternativas", [])]
         motivo = MotivoNoDisponible(datos["motivo"]) if datos.get("motivo") else None
-        return {"respuesta": P.no_disponible(motivo, alts),
+        return {"respuesta": P.no_disponible(motivo, alts, datos.get("pedida")),
                 "opciones": [a["hora"] for a in datos.get("alternativas", [])]}
 
     servicios = await _aturno.listar_servicios(negocio)

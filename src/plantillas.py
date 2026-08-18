@@ -181,6 +181,26 @@ _POR_QUE = {
 }
 
 
+def _semaforo(libres: int, mejor: int) -> str:
+    """Verde, amarillo o rojo según cuánto lugar queda ese día.
+
+    Con emoji y no con color: WhatsApp no renderiza formato, así que un
+    semáforo "visual" tiene que ser un carácter. Y el círculo va ANTES del
+    número — se lee la fila entera de un vistazo sin pasar por el texto, que
+    es exactamente para lo que sirve un semáforo.
+    """
+    if libres <= 0:
+        return "🔴"
+    if mejor <= 0:
+        return "🟢"
+    proporcion = libres / mejor
+    if proporcion >= 0.6:
+        return "🟢"
+    if proporcion >= 0.25:
+        return "🟡"
+    return "🔴"
+
+
 def selector_dias(dias: list[DiaConCupo], hoy: date | None = None) -> str:
     """Los próximos N días con su cupo, agrupados por semana.
 
@@ -194,6 +214,13 @@ def selector_dias(dias: list[DiaConCupo], hoy: date | None = None) -> str:
     hoy = hoy or hoy_del_negocio()
     # El lunes de la semana en curso. Cruzar de semana = cambiar de bloque.
     semana_actual = hoy - timedelta(days=hoy.weekday())
+
+    # El semáforo es RELATIVO al mejor día de la lista, no a un número fijo.
+    # Un consultorio con 4 turnos por día y una peluquería con 30 no pueden
+    # compartir el mismo umbral: en el primero, 3 libres es un día holgado; en
+    # la segunda, es un día casi lleno. Comparar contra el mejor día hace que
+    # el color signifique lo mismo en los dos.
+    mejor = max((d.libres for d in dias if d.motivo is None), default=0)
 
     lineas = []
     bloque_anterior: int | None = None
@@ -212,11 +239,12 @@ def selector_dias(dias: list[DiaConCupo], hoy: date | None = None) -> str:
         # mostrarlo sin número mantiene visible la forma de la semana sin
         # ofrecer algo que no existe.
         if d.motivo is not None:
-            lineas.append(f"   {_dia_corto(d.fecha)} — {_POR_QUE[d.motivo]}")
+            lineas.append(f"⚫ {_dia_corto(d.fecha)} — {_POR_QUE[d.motivo]}")
         else:
             numero += 1
             plural = "turno" if d.libres == 1 else "turnos"
-            lineas.append(f"{numero}. {_dia_corto(d.fecha)} — {d.libres} {plural}")
+            lineas.append(f"{_semaforo(d.libres, mejor)} {numero}. "
+                          f"{_dia_corto(d.fecha)} — {d.libres} {plural}")
 
     if numero == 0:
         return "No me queda ningún día con lugar en las próximas semanas."
@@ -315,13 +343,24 @@ _MOTIVOS = {
 }
 
 
-def no_disponible(motivo: MotivoNoDisponible, alternativas: list[Alternativa]) -> str:
+def no_disponible(motivo: MotivoNoDisponible, alternativas: list[Alternativa],
+                  pedida: str | None = None) -> str:
     """El motivo SIEMPRE, nunca un "no hay" pelado.
 
     Decir solo "no hay" obliga a la persona a adivinar qué probar. El motivo
     más una alternativa concreta convierte un rechazo en el próximo paso.
+
+    `pedida` es la hora que escribió, y cambia el motivo cuando cae DENTRO del
+    horario pero fuera de la grilla. Alguien que pide las 9:39 con turnos cada
+    30 minutos no está pidiendo un horario en que el local esté cerrado:
+    contestarle "a esa hora no atendemos" es falso y encima confuso, porque
+    abajo le ofrecemos las 9:00 del mismo día.
     """
-    lineas = [_MOTIVOS.get(motivo, "No puedo dar ese turno.")]
+    if pedida and motivo == MotivoNoDisponible.FUERA_DE_HORARIO and alternativas:
+        cabecera = f"Las {pedida} no las tengo disponibles."
+    else:
+        cabecera = _MOTIVOS.get(motivo, "No puedo dar ese turno.")
+    lineas = [cabecera]
     if alternativas:
         lineas += ["", "Lo más cercano que tengo:", ""]
         for i, a in enumerate(alternativas[:3], 1):
