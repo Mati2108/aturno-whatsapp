@@ -467,7 +467,8 @@ def link_web(nombre_negocio: str, url: str | None) -> str:
         "",
         url,
         "",
-        "Si preferís, lo cerramos por acá y no hace falta que entres.",
+        "Si preferís, lo cerramos por acá y no hace falta que entres. "
+        "¿Seguimos?",
     ])
 
 
@@ -562,4 +563,9 @@ def respuesta_info(texto: str) -> str:
 
 
 def cancelado() -> str:
-    return "Listo, cancelé la reserva. Cuando quieras arrancamos de nuevo."
+    # "Cuando quieras arrancamos de nuevo" suena bien y no sirve: no dice qué
+    # escribir. Alguien que canceló y quiere volver a empezar se queda mirando
+    # la pantalla sin saber si tiene que decir algo o esperar. La palabra
+    # exacta cuesta lo mismo.
+    return ("Listo, cancelé la reserva.\n\n"
+            "Escribime «hola» cuando quieras empezar de nuevo.")

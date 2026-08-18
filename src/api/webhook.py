@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+
+import httpx
 from datetime import datetime, timedelta, timezone
 
 from fastapi import BackgroundTasks, FastAPI, Form, Header, HTTPException, Request
@@ -590,12 +592,26 @@ def _mostrar_escribiendo(message_sid: str) -> None:
     """
     if not message_sid:
         return
+    cfg = config()
     try:
-        _twilio().messaging.v2.typing_indicators.create(
-            channel="whatsapp", message_id=message_sid
+        # Por HTTP y no por el SDK: `messaging.v2.typing_indicators` no existe
+        # en la librería (probado con twilio 9.11) y la llamada tiraba
+        # AttributeError. Como el error se tragaba en un `except` amplio y se
+        # logueaba en `debug` —que no se muestra—, el indicador NUNCA funcionó
+        # y nada lo delataba. El endpoint real es v3.
+        r = httpx.post(
+            "https://messaging.twilio.com/v3/Indicators/Typing.json",
+            auth=(cfg.twilio_account_sid, cfg.twilio_auth_token),
+            json={"channel": "WHATSAPP", "messageId": message_sid},
+            timeout=4,
         )
+        if r.status_code >= 400:
+            # INFO y no debug: un indicador que no sale es cosmético, pero
+            # tiene que poder verse en los logs. La versión anterior fallaba
+            # en silencio desde el primer día.
+            logger.info("el indicador no salió (%d): %s", r.status_code, r.text[:100])
     except Exception as e:  # noqa: BLE001 — cosmético, no rompe el flujo
-        logger.debug("No se pudo mostrar el indicador: %s", e)
+        logger.info("no se pudo mostrar el indicador: %s", e)
 
 
 async def _procesar_y_responder(
