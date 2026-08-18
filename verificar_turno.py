@@ -18,9 +18,12 @@ memoria. Esto habla con el aturno real y escribe en la agenda real.
 
 CÓMO SE USA
 -----------
-    python verificar_turno.py                 # contra aturno real
-    python verificar_turno.py --doble         # sin red, contra el doble
-    python verificar_turno.py --no-limpiar    # deja los turnos creados
+    python verificar_turno.py                 # sin red, contra el doble
+    python verificar_turno.py --real          # escribe en la agenda REAL
+    python verificar_turno.py --real --no-limpiar    # deja los turnos creados
+
+Sin `--real` no toca nada de nadie. Con `--real` saca turnos de verdad, y por
+eso hay que pedirlo a mano.
 
 Cada escenario reserva y después CANCELA lo que creó, así se puede correr las
 veces que haga falta sin llenar la agenda. Los turnos se piden para dentro de
@@ -227,10 +230,22 @@ async def cancelar(base: str, codigo: str) -> bool:
 
 async def main() -> int:
     p = argparse.ArgumentParser(description="¿Se puede sacar un turno?")
-    p.add_argument("--doble", action="store_true", help="sin red, contra el doble")
+    p.add_argument("--real", action="store_true",
+                   help="escribe en la agenda REAL (sin esto, corre contra el doble)")
     p.add_argument("--no-limpiar", action="store_true", help="no cancela lo creado")
     p.add_argument("--detalle", action="store_true")
     args = p.parse_args()
+
+    # Antes era al revés: por defecto escribía en la agenda real y había que
+    # pedir `--doble` para no hacerlo. Cada corrida dejaba cuatro turnos en los
+    # primeros horarios libres del día, y aunque después los cancelaba, el
+    # documento queda y el panel muestra los cancelados. Después de una tarde
+    # de correrlo, el dueño abría su agenda y encontraba sesenta y cuatro
+    # turnos tachados en un mismo miércoles, sin saber de dónde salieron.
+    #
+    # Escribir en la agenda de un negocio que está andando es una decisión, no
+    # un default. Ahora hay que pedirla.
+    args.doble = not args.real
 
     logging.basicConfig(level=logging.INFO if args.detalle else logging.ERROR,
                         format=f"{GRIS}%(message)s{FIN}")
@@ -317,7 +332,14 @@ async def main() -> int:
         for f in v.fallas:
             print(f"    · {f}")
     else:
-        print(f"{VERDE}{NEGRITA}  SE PUEDE SACAR UN TURNO. Todo verificado contra la agenda real.{FIN}")
+        # Sin --real no se miró ninguna agenda: decir "verificado contra la
+        # agenda real" acá sería mentir en verde, que es la peor forma.
+        if args.doble:
+            print(f"{VERDE}{NEGRITA}  La conversación llega hasta el turno.{FIN}")
+            print(f"{GRIS}  Contra el doble en memoria. Para verificarlo en la agenda"
+                  f" real: python verificar_turno.py --real{FIN}")
+        else:
+            print(f"{VERDE}{NEGRITA}  SE PUEDE SACAR UN TURNO. Todo verificado contra la agenda real.{FIN}")
     print(f"{'═'*68}\n")
     return 1 if v.fallas else 0
 
