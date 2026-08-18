@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from datetime import date, datetime, time, timedelta
 
 import httpx
@@ -540,28 +541,53 @@ class AturnoAPI(ClienteAturno):
 
     async def _quien_atiende(self, slug: str, servicio_id: str, dia: date,
                              hora: time) -> str | None:
-        """El primer profesional habilitado que esté libre a esa hora.
+        """Uno de los que estén libres a esa hora, al azar.
 
-        "El primero" y no "el que tenga menos turnos": repartir la carga es una
-        decisión del negocio, no del canal, y aturno todavía no la expone. Lo
-        que sí importa es que el turno salga CON alguien asignado.
+        AL AZAR Y NO EL PRIMERO, que es lo que hacía antes. Con dos personas
+        libres a la misma hora, "el primero" significa que quien encabeza la
+        lista se lleva TODOS los turnos de quien dice "me da igual" — un sesgo
+        que mete el canal y que el negocio no eligió. Repartir parejo entre los
+        que pueden atender es lo más cercano a no decidir nada.
 
-        Si ninguno está libre, devuelve None y el turno se crea sin asignar —
-        que es lo que pasaba siempre antes. Es un caso raro (el horario se
-        ofreció porque había lugar) y sigue siendo mejor que perder la reserva.
+        Es el único lugar del sistema donde el azar es correcto. En todo lo
+        demás —qué paso sigue, qué texto sale, qué horarios se ofrecen— la
+        variabilidad es un defecto; acá es justamente lo que se busca.
+
+        Se consultan todos en paralelo. Secuencial cortaría en el primero libre
+        —más rápido— pero es exactamente el sesgo que este método existe para
+        evitar.
+
+        Si ninguno está libre devuelve None y el turno se crea sin asignar. Es
+        un caso raro, porque el horario se ofreció porque había lugar, y sigue
+        siendo mejor que perder la reserva.
         """
-        for persona in await self.listar_personal(slug, servicio_id):
+        gente = await self.listar_personal(slug, servicio_id)
+        if not gente:
+            return None
+
+        async def libre(persona) -> bool:
             try:
                 consulta = await self.consultar_pedido(
                     slug, servicio_id, dia, hora, persona.id)
+                return consulta.disponible
             except Exception:  # noqa: BLE001
-                continue
-            if consulta.disponible:
-                logger.info("«me da igual» → asignado %s", persona.nombre)
-                return persona.id
-        logger.warning("nadie libre a las %s del %s: el turno va sin asignar",
-                       hora, dia)
-        return None
+                return False
+
+        disponibles = [
+            persona
+            for persona, esta in zip(gente, await asyncio.gather(
+                *(libre(p) for p in gente)))
+            if esta
+        ]
+        if not disponibles:
+            logger.warning("nadie libre a las %s del %s: el turno va sin asignar",
+                           hora, dia)
+            return None
+
+        elegido = random.choice(disponibles)
+        logger.info("«me da igual» → %s (sorteado entre %d libre(s))",
+                    elegido.nombre, len(disponibles))
+        return elegido.id
 
     async def crear_turno(self, business_id: str, servicio_id: str, dia: date,
                           hora: time, cliente: DatosDelCliente,

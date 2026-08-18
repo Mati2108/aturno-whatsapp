@@ -18,6 +18,7 @@ y el objetivo del doble es desbloquear el desarrollo, no reimplementarlas.
 
 from __future__ import annotations
 
+import random
 import secrets
 from datetime import date, datetime, time, timedelta
 
@@ -306,11 +307,13 @@ class AturnoDoble(ClienteAturno):
                 motivo_del_rechazo=_explicar(consulta.motivo, dia, hora),
             )
 
-        # Asignamos a la primera persona libre del equipo habilitado.
+        # Entre los libres, uno al azar. "El primero" hacía que la primera
+        # persona de la lista se llevara todos los turnos de quien dice "me da
+        # igual": un sesgo que mete el sistema y que el negocio no eligió.
         equipo = await self._equipo_para(business_id, servicio_id, profesional_id)
-        asignado = next(
-            p for p in equipo if (business_id, p.id, dia, hora) not in self._ocupados
-        )
+        libres = [p for p in equipo
+                  if (business_id, p.id, dia, hora) not in self._ocupados]
+        asignado = random.choice(libres)
 
         booking_id = f"bk-{secrets.token_hex(6)}"
         self._ocupados[(business_id, asignado.id, dia, hora)] = booking_id
