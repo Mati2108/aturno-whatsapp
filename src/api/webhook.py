@@ -356,6 +356,12 @@ class Salud(BaseModel):
     embeddings: str = Field(description="Modelo de embeddings en uso.")
     aturno_modo: str = Field(description="'doble' en memoria o 'api' real.")
     numero: str = Field(default="", description="El número al que le escriben.")
+    busqueda: bool = Field(
+        default=False,
+        description="Si el índice de preguntas está disponible. En false el bot "
+                    "saca turnos igual, pero a las preguntas contesta que no "
+                    "tiene el dato cargado.",
+    )
     sandbox: bool = Field(
         default=False,
         description="Si es el número compartido de prueba de Twilio, que obliga "
@@ -468,6 +474,23 @@ async def _pasar_a_manos_humanas(business_id: str, telefono: str) -> None:
         logger.warning("no se pudo marcar la conversación", exc_info=True)
 
 
+def _hay_indice() -> bool:
+    """¿Se puede buscar en el conocimiento del negocio?
+
+    Se pregunta acá y no se asume: el índice se construye al arrancar con una
+    API externa, y ese paso puede fallar sin que el resto del servicio se
+    entere. Antes eso tumbaba el contenedor entero; ahora arranca igual, y
+    esto es lo que hace visible que arrancó a medias.
+    """
+    try:
+        from src.rag.indice import abrir_indice
+
+        abrir_indice()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 @app.get("/salud", response_model=Salud)
 async def salud() -> Salud:
     """Chequeo rápido: ¿está vivo y con qué configuración?"""
@@ -478,6 +501,7 @@ async def salud() -> Salud:
         embeddings=modelo_en_uso().split("/")[-1],
         aturno_modo=cfg.aturno_modo,
         numero=cfg.twilio_whatsapp_number,
+        busqueda=_hay_indice(),
         # El sandbox de Twilio es siempre este número, compartido por todos.
         # Importa decirlo: con él, nadie puede escribirle al bot sin mandar
         # antes el "join", y un negocio que no lo sabe reparte un número que
