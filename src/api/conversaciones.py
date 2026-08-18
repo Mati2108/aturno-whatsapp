@@ -73,7 +73,7 @@ class EventoDeConversacion(BaseModel):
     telefono: str
     texto: str
     direccion: str = Field(description="'entrante' o 'saliente'")
-    autor: str = Field(description="'cliente', 'bot' o 'negocio'")
+    autor: str = Field(description="'cliente', 'bot', 'negocio' o 'sistema'")
     momento: str
     # Cuando esto es true, el panel tiene que hacer ruido.
     necesita_humano: bool = False
@@ -128,7 +128,13 @@ async def avisar_a_aturno(evento: EventoDeConversacion) -> bool:
 def evento(business_id: str, telefono: str, texto: str, *, de_quien: str,
            necesita_humano: bool = False, en_manos_humanas: bool = False,
            paso: str | None = None) -> EventoDeConversacion:
-    """Arma el evento. `de_quien` es 'cliente', 'bot' o 'negocio'."""
+    """Arma el evento.
+
+    `de_quien` es 'cliente', 'bot', 'negocio' o 'sistema'. Los tres primeros
+    son quien habló; 'sistema' es lo que PASÓ —el negocio tomó el control, el
+    asistente la retomó— y el panel lo dibuja centrado, sin burbuja, porque no
+    es de nadie.
+    """
     return EventoDeConversacion(
         business_id=business_id,
         telefono=telefono,

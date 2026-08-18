@@ -412,6 +412,43 @@ async def responder_desde_el_panel(
     return Enviado(enviado=True, detalle="ok", momento=ahora().isoformat())
 
 
+@app.post("/panel/tomar", response_model=Enviado)
+async def tomar_desde_el_panel(
+    mensaje: MensajeDelPanel,
+    x_panel_secret: str = Header(default=""),
+) -> Enviado:
+    """El negocio se hace cargo de la conversación, sin escribir nada todavía.
+
+    Hasta acá la única forma de que el bot se callara era contestarle a la
+    persona, y eso obliga a tener algo para decir. El caso que faltaba es el
+    que más apura: el dueño ve que el asistente está por meter la pata y
+    necesita frenarlo AHORA, no cuando termine de redactar. Cada segundo de esa
+    demora es un mensaje más del bot.
+
+    No sale nada por WhatsApp. Tomar el control no es un mensaje para el
+    cliente: es un cambio de quién atiende, y el cliente se entera por lo que
+    venga después.
+    """
+    if not _secreto_valido(x_panel_secret):
+        raise HTTPException(status_code=404, detail="No encontrado")
+
+    negocio = next((t for t in TENANTS.values()
+                    if t.business_id == mensaje.business_id), None)
+    if negocio is None:
+        raise HTTPException(status_code=400, detail="Ese negocio no atiende por acá")
+
+    await _pasar_a_manos_humanas(negocio.business_id, mensaje.telefono)
+
+    # Queda escrito en el hilo. Sin esto, el panel mostraría al bot contestando
+    # y de golpe al dueño, sin nada que explique el corte; el que lo lee tres
+    # días después no tiene cómo saber quién agarró la conversación ni cuándo.
+    await avisar_a_aturno(evento(
+        mensaje.business_id, mensaje.telefono,
+        "Tomaste el control. El asistente no responde hasta que se lo devuelvas.",
+        de_quien="sistema", en_manos_humanas=True))
+    return Enviado(enviado=True, detalle="ok", momento=ahora().isoformat())
+
+
 @app.post("/panel/devolver", response_model=Enviado)
 async def devolver_al_bot(
     mensaje: MensajeDelPanel,
