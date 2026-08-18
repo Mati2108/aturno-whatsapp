@@ -321,7 +321,12 @@ class AturnoDoble(ClienteAturno):
             codigo=self._codigo(),
             fecha=dia,
             hora=hora,
-            servicio=f"{servicio.nombre} con {asignado.nombre}",
+            servicio=servicio.nombre,
+            # Quién quedó asignado. El nombre iba pegado dentro de `servicio`
+            # ("Corte con Lean"), y eso obligaba a la plantilla a recibirlo
+            # mezclado con el nombre del servicio: dos datos en un campo se
+            # terminan separando mal en algún lado.
+            profesional=asignado.nombre,
         )
 
     # ---------- internos ----------

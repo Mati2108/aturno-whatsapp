@@ -326,6 +326,9 @@ class TurnoConfirmado(BaseModel):
     fecha: date | None = None
     hora: time | None = None
     servicio: str | None = None
+    # Con quién quedó, aunque la persona haya dicho que le daba igual. Es lo
+    # primero que va a querer saber cuando llegue al local.
+    profesional: str | None = None
     motivo_del_rechazo: str | None = None
 
     @field_validator("motivo_del_rechazo")

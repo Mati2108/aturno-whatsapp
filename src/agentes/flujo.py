@@ -719,6 +719,7 @@ async def _reservar(conv: Conversacion, cambios: dict, negocio: str, cfg: dict) 
             "fecha": turno.fecha.isoformat(),
             "hora": turno.hora.strftime("%H:%M"),
             "codigo": turno.codigo,
+            "profesional": turno.profesional,
         },
     }
 
@@ -799,7 +800,7 @@ async def responder(conv: Conversacion, config) -> dict:
 
     if especial == "confirmado":
         return {"respuesta": P.confirmado(
-            datos["servicio"], None,
+            datos["servicio"], datos.get("profesional"),
             date.fromisoformat(datos["fecha"]),
             datetime.strptime(datos["hora"], "%H:%M").time(),
             datos["codigo"]), "opciones": []}

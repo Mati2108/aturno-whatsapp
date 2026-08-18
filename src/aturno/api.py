@@ -538,6 +538,31 @@ class AturnoAPI(ClienteAturno):
             for h in cercanas
         ]
 
+    async def _quien_atiende(self, slug: str, servicio_id: str, dia: date,
+                             hora: time) -> str | None:
+        """El primer profesional habilitado que esté libre a esa hora.
+
+        "El primero" y no "el que tenga menos turnos": repartir la carga es una
+        decisión del negocio, no del canal, y aturno todavía no la expone. Lo
+        que sí importa es que el turno salga CON alguien asignado.
+
+        Si ninguno está libre, devuelve None y el turno se crea sin asignar —
+        que es lo que pasaba siempre antes. Es un caso raro (el horario se
+        ofreció porque había lugar) y sigue siendo mejor que perder la reserva.
+        """
+        for persona in await self.listar_personal(slug, servicio_id):
+            try:
+                consulta = await self.consultar_pedido(
+                    slug, servicio_id, dia, hora, persona.id)
+            except Exception:  # noqa: BLE001
+                continue
+            if consulta.disponible:
+                logger.info("«me da igual» → asignado %s", persona.nombre)
+                return persona.id
+        logger.warning("nadie libre a las %s del %s: el turno va sin asignar",
+                       hora, dia)
+        return None
+
     async def crear_turno(self, business_id: str, servicio_id: str, dia: date,
                           hora: time, cliente: DatosDelCliente,
                           profesional_id: str | None = None) -> TurnoConfirmado:
@@ -549,6 +574,18 @@ class AturnoAPI(ClienteAturno):
         que poder contar, así que vuelve como RECHAZADO con motivo.
         """
         servicio = await self._servicio_crudo(business_id, servicio_id)
+
+        # Si la persona dijo "me da igual", ACÁ se decide quién atiende.
+        #
+        # Antes se mandaba `staff: null` y aturno lo guardaba así: el turno
+        # quedaba sin profesional asignado y el negocio tenía que resolverlo a
+        # mano mirando su agenda. La página pública no hace eso —elige uno
+        # libre antes de reservar— y el bot tiene que comportarse igual, o los
+        # turnos que entran por WhatsApp se distinguen por estar incompletos.
+        if profesional_id is None:
+            profesional_id = await self._quien_atiende(
+                business_id, servicio_id, dia, hora)
+
         cuerpo: dict = {
             "businessId": await self._uid(business_id),
             "service": {
@@ -588,6 +625,9 @@ class AturnoAPI(ClienteAturno):
                 booking_id=datos.get("bookingId"),
                 codigo=datos.get("code"),
                 fecha=dia, hora=hora, servicio=servicio.get("name"),
+                # Quién quedó asignado, aunque la persona haya dicho que le
+                # daba igual: es la información que necesita cuando llega.
+                profesional=(cuerpo.get("staff") or {}).get("name"),
             )
 
         motivo = "Ese horario ya no está disponible"
