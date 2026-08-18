@@ -319,11 +319,30 @@ class Recuperador:
         return resultados
 
     async def contexto(self, consulta: str) -> str:
-        """Los fragmentos ya formateados para meter en el prompt del modelo."""
+        """Los fragmentos, listos para mandárselos a la persona.
+
+        Se sacan las líneas que empiezan con `>`. Son las preguntas que el
+        panel escribe en cada sección para que la búsqueda encuentre la
+        respuesta: sin ellas, una dirección suelta no se parece en nada a
+        "¿dónde quedan?" —tres palabras sin un solo término en común— y el bot
+        contesta que no lo tiene cargado teniéndolo.
+
+        Se indexan y no se muestran, que son dos cosas distintas y acá se
+        confunden fácil: lo que devuelve esto se le manda al cliente TAL CUAL,
+        sin que un modelo lo reescriba. Un bot que repite tu pregunta antes de
+        contestarla suena a formulario, no a alguien atendiendo.
+        """
         docs = await self.buscar(consulta)
         if not docs:
             return ""
-        return "\n\n---\n\n".join(d.page_content.strip() for d in docs)
+        limpios = []
+        for d in docs:
+            visible = "\n".join(
+                l for l in d.page_content.splitlines() if not l.lstrip().startswith(">")
+            ).strip()
+            if visible:
+                limpios.append(visible)
+        return "\n\n---\n\n".join(limpios)
 
 
 if __name__ == "__main__":
