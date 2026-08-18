@@ -231,6 +231,19 @@ class AturnoAPI(ClienteAturno):
         doc = await self._negocio(business_id)
         return (doc.get("businessInfo") or {}).get("name") or doc.get("name")
 
+    async def conocimiento(self, slug: str) -> str:
+        """El texto que el negocio cargó en el panel para que el bot conteste.
+
+        Sin caché, al revés que el resto: esto se pide justo después de que
+        alguien apretó "Guardar" en el panel, y devolver la versión de hace
+        cinco minutos sería devolver exactamente lo que se acaba de cambiar.
+        """
+        r = await self._http.get(
+            f"{self._base}/api/public/business/{slug}/conocimiento")
+        if r.status_code >= 400:
+            raise RuntimeError(f"aturno devolvió {r.status_code}")
+        return (r.json() or {}).get("markdown") or ""
+
     async def contacto(self, business_id: str) -> Contacto:
         """El contacto del negocio, para derivar a una persona.
 

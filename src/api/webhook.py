@@ -50,7 +50,7 @@ from src.aturno.doble import AturnoDoble
 from src.config import TENANTS, config, tenant_por_numero
 from src.fechas import ahora, calendario
 from src.observabilidad import configurar_trazas, trazado_activo
-from src.rag.indice import modelo_en_uso
+from src.rag.indice import modelo_en_uso, reindexar_negocio
 from src.schemas import MensajeEntrante, Tenant
 
 logger = logging.getLogger("pipeline.webhook")
@@ -447,6 +447,56 @@ async def tomar_desde_el_panel(
         "Tomaste el control. El asistente no responde hasta que se lo devuelvas.",
         de_quien="sistema", en_manos_humanas=True))
     return Enviado(enviado=True, detalle="ok", momento=ahora().isoformat())
+
+
+@app.post("/panel/reindexar", response_model=Enviado)
+async def reindexar_desde_el_panel(
+    mensaje: MensajeDelPanel,
+    x_panel_secret: str = Header(default=""),
+) -> Enviado:
+    """El negocio contestó el formulario: el bot vuelve a leer lo que sabe.
+
+    Hasta ahora el conocimiento vivía en un `.md` de este repo, así que cargar
+    una respuesta era editar código y deployar. Ahora se carga desde el panel y
+    esto es lo que lo pone en uso.
+
+    Se reindexa SOLO a este negocio, no todo. Los embeddings del plan gratuito
+    son 1.000 por día para todo el proyecto: reconstruir el índice entero cada
+    vez que alguien contesta una pregunta se comería la cuota de los demás, y
+    con la cuota agotada el bot no puede contestar nada de nadie.
+    """
+    if not _secreto_valido(x_panel_secret):
+        raise HTTPException(status_code=404, detail="No encontrado")
+
+    negocio = next((t for t in TENANTS.values()
+                    if t.business_id == mensaje.business_id), None)
+    if negocio is None:
+        raise HTTPException(status_code=400, detail="Ese negocio no atiende por acá")
+
+    try:
+        markdown = await aturno.conocimiento(negocio.business_id)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("no se pudo leer el conocimiento de %s", negocio.business_id)
+        return Enviado(enviado=False, detalle=str(e)[:120], momento=ahora().isoformat())
+
+    try:
+        # Bloqueante: calcula embeddings. Va a un hilo aparte para no frenar el
+        # bucle mientras hay gente escribiéndole al bot.
+        cuantos = await asyncio.to_thread(
+            reindexar_negocio, negocio.business_id, markdown)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("falló el reindexado de %s", negocio.business_id)
+        return Enviado(enviado=False, detalle=str(e)[:120], momento=ahora().isoformat())
+
+    # El recuperador cacheado tiene el índice abierto desde que se creó. Sin
+    # tirarlo, el negocio guarda el formulario, ve que se guardó, y el bot le
+    # sigue diciendo "ese dato no lo tengo cargado" hasta que se reinicie.
+    flujo.olvidar_recuperador(negocio.business_id)
+
+    logger.info("%s reindexado desde el panel: %d fragmentos",
+                negocio.business_id, cuantos)
+    return Enviado(enviado=True, detalle=f"{cuantos} fragmentos",
+                   momento=ahora().isoformat())
 
 
 @app.post("/panel/devolver", response_model=Enviado)

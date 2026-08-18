@@ -129,6 +129,34 @@ async def avisar_a_aturno(evento: EventoDeConversacion) -> bool:
         return False
 
 
+async def avisar_sin_respuesta(business_id: str, texto: str) -> bool:
+    """Le cuenta a aturno que el bot no supo contestar esto.
+
+    Antes esa pregunta se perdía: el bot decía "ese dato no lo tengo cargado" y
+    ahí terminaba, así que el negocio nunca se enteraba de qué le estaban
+    preguntando y nunca podía cargarlo. Esta llamada es la diferencia entre un
+    bot que se queda como está y uno que mejora con el uso.
+
+    Como todo lo que va al panel: en segundo plano y sin lanzar nunca. Que se
+    pierda una pregunta de la lista es una lástima; que la persona se quede
+    esperando porque el panel no contestó es peor.
+    """
+    cfg = config()
+    if not cfg.panel_url or not cfg.panel_secreto:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=8) as http:
+            r = await http.post(
+                f"{cfg.panel_url.rstrip('/')}/api/whatsapp/bot/sin-respuesta",
+                json={"business_id": business_id, "texto": texto[:300]},
+                headers={"x-bot-secret": cfg.panel_secreto},
+            )
+        return r.status_code < 400
+    except Exception:  # noqa: BLE001
+        logger.warning("no se pudo avisar la pregunta sin respuesta", exc_info=True)
+        return False
+
+
 def evento(business_id: str, telefono: str, texto: str, *, de_quien: str,
            necesita_humano: bool = False, en_manos_humanas: bool = False,
            paso: str | None = None,

@@ -27,6 +27,7 @@ LO QUE ESTE DISEÑO HACE IMPOSIBLE
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, datetime, time
 
@@ -57,6 +58,7 @@ from src.config import config as ajustes
 from src.escalacion import Escalacion, notificar
 from src.fechas import ahora
 from src.fechas import hoy as hoy_del_negocio
+from src.api.conversaciones import avisar_sin_respuesta
 from src.rag.indice import Recuperador, abrir_indice
 from src.schemas import (
     Alternativa,
@@ -111,6 +113,17 @@ def _rag(business_id: str) -> Recuperador:
     if business_id not in _recuperadores:
         _recuperadores[business_id] = Recuperador(business_id, abrir_indice())
     return _recuperadores[business_id]
+
+
+def olvidar_recuperador(business_id: str) -> None:
+    """Tira el recuperador cacheado de un negocio.
+
+    Se llama después de reindexar. El objeto guarda la conexión al índice
+    abierta desde que se creó, así que sin esto el negocio contesta el
+    formulario, ve que se guardó, y el bot le sigue diciendo "ese dato no lo
+    tengo cargado" hasta el próximo reinicio del servicio.
+    """
+    _recuperadores.pop(business_id, None)
 
 
 class Conversacion(TypedDict):
@@ -299,6 +312,19 @@ async def avanzar(conv: Conversacion, config) -> dict:
         except Exception:  # noqa: BLE001
             logger.warning("la búsqueda falló para %s", negocio, exc_info=True)
             texto = ""
+
+        # Sin texto, el negocio no tiene cargada esa respuesta. La pregunta va
+        # al panel en vez de perderse: hasta ahora el bot decía "no lo tengo
+        # cargado" y ahí terminaba, así que el negocio nunca se enteraba de qué
+        # le preguntaban y nunca podía cargarlo.
+        #
+        # En segundo plano y sin esperar: la persona no puede quedarse
+        # esperando a que el panel conteste. Y sólo cuando la búsqueda no
+        # encontró nada, no cuando el buscador está caído — una cuota agotada
+        # llenaría la lista de preguntas que el negocio SÍ tiene contestadas.
+        if not texto:
+            asyncio.create_task(avisar_sin_respuesta(negocio, consulta))
+
         return {"_plantilla": "info", "_datos": {"texto": texto}}
 
     if intent == Intencion.VOLVER:

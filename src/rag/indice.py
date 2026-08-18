@@ -221,6 +221,47 @@ def construir_indice(recrear: bool = False) -> Chroma:
     return indice
 
 
+def reindexar_negocio(business_id: str, markdown: str) -> int:
+    """Reemplaza en el índice lo que sabe UN negocio. Devuelve los fragmentos.
+
+    Reemplaza y no agrega: indexar encima duplicaría los fragmentos, y un
+    duplicado se ve como el bot repitiéndose sin razón.
+
+    Y toca solo a ese negocio en vez de reconstruir todo el índice, que es lo
+    que hace `construir_indice(recrear=True)`. La diferencia no es de
+    prolijidad: los embeddings del plan gratuito son 1.000 por día para TODO el
+    proyecto. Reconstruir entero cada vez que un negocio contesta una pregunta
+    del formulario se come la cuota de todos los demás, y cuando se agota el
+    bot deja de poder contestar cualquier cosa.
+
+    El archivo se escribe igual, para que un reinicio que reconstruye desde
+    cero encuentre lo mismo que hay en el índice.
+    """
+    CARPETA_DATOS.mkdir(parents=True, exist_ok=True)
+    archivo = CARPETA_DATOS / f"{business_id}.md"
+
+    indice = abrir_indice()
+    # Se borra siempre, incluso si no hay nada nuevo: un negocio que borró todas
+    # sus respuestas quiere que el bot DEJE de contestar eso, y dejar los
+    # fragmentos viejos sería lo contrario de lo que pidió.
+    try:
+        indice.delete(where={"business_id": business_id})
+    except Exception:  # noqa: BLE001 — no existía nada de este negocio
+        logger.info("no había nada indexado de %s", business_id)
+
+    if not (markdown or "").strip():
+        archivo.unlink(missing_ok=True)
+        logger.info("%s se quedó sin conocimiento cargado", business_id)
+        return 0
+
+    archivo.write_text(markdown, encoding="utf-8")
+    trozos = _fragmentar(markdown, business_id)
+    if trozos:
+        indice.add_documents(trozos)
+    logger.info("%s reindexado: %d fragmentos", business_id, len(trozos))
+    return len(trozos)
+
+
 def abrir_indice() -> Chroma:
     """Abre el índice ya construido, sin recalcular embeddings."""
     if not CARPETA_INDICE.exists():

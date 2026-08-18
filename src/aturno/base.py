@@ -54,6 +54,17 @@ class ClienteAturno(ABC):
         """
         return None
 
+    async def conocimiento(self, business_id: str) -> str:
+        """Lo que el negocio cargó para que el bot pueda contestar preguntas.
+
+        Vacío por defecto, como `contacto`: una implementación que no lo
+        resuelva sigue siendo válida —el doble en memoria no tiene panel de
+        dónde leerlo— y el bot ya sabe qué contestar cuando no hay nada
+        cargado. Hacerlo abstracto rompería el doble para agregar algo que
+        puede faltar legítimamente.
+        """
+        return ""
+
     async def contacto(self, business_id: str) -> Contacto:
         """Cómo hablar con una persona del negocio.
 
