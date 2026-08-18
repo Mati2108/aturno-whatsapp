@@ -344,7 +344,7 @@ _MOTIVOS = {
 
 
 def no_disponible(motivo: MotivoNoDisponible, alternativas: list[Alternativa],
-                  pedida: str | None = None) -> str:
+                  pedida: str | None = None, sugerencia: str | None = None) -> str:
     """El motivo SIEMPRE, nunca un "no hay" pelado.
 
     Decir solo "no hay" obliga a la persona a adivinar qué probar. El motivo
@@ -356,6 +356,16 @@ def no_disponible(motivo: MotivoNoDisponible, alternativas: list[Alternativa],
     contestarle "a esa hora no atendemos" es falso y encima confuso, porque
     abajo le ofrecemos las 9:00 del mismo día.
     """
+    # Con una sugerencia cerca, una sola pregunta cerrada y nada más. Alguien
+    # que se equivocó por nueve minutos no necesita volver a elegir de una
+    # lista: necesita confirmar lo que quiso poner.
+    if sugerencia:
+        return "\n".join([
+            f"Las {pedida} no las tengo. ¿Te sirven las {sugerencia}?",
+            "",
+            "Respondeme sí, o decime otro horario.",
+        ])
+
     if pedida and motivo == MotivoNoDisponible.FUERA_DE_HORARIO and alternativas:
         cabecera = f"Las {pedida} no las tengo disponibles."
     else:

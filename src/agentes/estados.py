@@ -271,6 +271,28 @@ def _dia_por_texto(texto: str, opciones: list[str]) -> int | None:
     return None
 
 
+AFIRMACIONES = frozenset({
+    "si", "sisi", "si si", "dale", "ok", "oka", "okey", "listo", "obvio",
+    "claro", "de una", "vale", "correcto", "esa", "esa si", "perfecto",
+    "si porfa", "si por favor", "sirve", "me sirve", "esa misma",
+})
+
+
+def afirmacion_sobre_lo_unico(texto: str, opciones: list[str]) -> int | None:
+    """Un "sí" cuando hay UNA sola opción en pantalla apunta a esa opción.
+
+    Existe para el caso del tipeo: el bot pregunta "las 9:39 no las tengo,
+    ¿te sirven las 9:30?" y la respuesta natural es "sí", no "1". Pedirle un
+    número a alguien que ya contestó que sí es hacerlo contestar dos veces.
+
+    La condición de UNA sola opción es lo que lo hace seguro: con ocho
+    horarios en pantalla, "sí" no señala ninguno y esto no se activa.
+    """
+    if len(opciones) != 1:
+        return None
+    return 0 if _normalizar(texto) in AFIRMACIONES else None
+
+
 def opcion_por_nombre(texto: str, opciones: list[str]) -> int | None:
     """El índice de la opción que la persona nombró, sin llamar al LLM.
 

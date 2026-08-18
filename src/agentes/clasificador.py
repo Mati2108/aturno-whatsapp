@@ -74,6 +74,10 @@ Hoy es {hoy} ({dia_semana}).
 
 Reglas de extracción:
 - fecha en AAAA-MM-DD, hora en HH:MM de 24 horas.
+- La hora es EXACTAMENTE la que escribió la persona, aunque no esté en las
+  opciones. Si escribe 10:37, devolvés 10:37, nunca 10:30. Redondear al
+  horario más cercano es una decisión que toma el sistema y se le pregunta a
+  la persona; hacerlo acá la esconde y le reserva otra hora sin avisarle.
 - "mañana" sola es el DÍA DE MAÑANA. "a la mañana" es la franja horaria.
 - Convertí los días a AAAA-MM-DD usando la tabla de arriba, no calcules.
 - "cualquiera", "me da igual", "el que sea" -> profesional: "cualquiera".

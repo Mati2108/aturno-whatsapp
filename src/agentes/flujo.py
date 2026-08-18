@@ -42,6 +42,7 @@ from src.agentes.estados import (
     Estado,
     Intencion,
     anterior,
+    afirmacion_sobre_lo_unico,
     numero_elegido,
     opcion_por_nombre,
     respuesta_fija,
@@ -82,6 +83,13 @@ MAX_MENSAJE = 400
 # Cuántos mensajes seguidos sin entender antes de ofrecer una persona. Dos y
 # no tres: al tercer "no te entendí" idéntico, la gente ya se fue.
 LIMITE_SIN_ENTENDER = 2
+
+# Cuánto puede errarle alguien a un horario y que siga siendo un tipeo.
+#
+# "9:39" con turnos cada media hora es un dedo que se fue, no un pedido. Corto
+# a propósito: con media hora de tolerancia esto dejaría de corregir un tipeo y
+# pasaría a elegir por la persona, que es otra cosa.
+TOLERANCIA_TIPEO = 15   # minutos
 
 # Cuántos horarios entran en un mensaje. Veinte horarios en un celular obligan
 # a hacer scroll para elegir, y elegir es justo lo que la persona vino a hacer.
@@ -176,6 +184,9 @@ async def entender(conv: Conversacion, config) -> dict:
     if indice is None:
         indice = opcion_por_nombre(texto, opciones)
         como = "nombre"
+    if indice is None:
+        indice = afirmacion_sobre_lo_unico(texto, opciones)
+        como = "sí"
     if indice is not None:
         logger.info("%s «%s» → %s (sin LLM)", como, texto[:24], opciones[indice])
         return {
@@ -387,6 +398,42 @@ def _limpiar_desde(paso: Estado) -> dict:
     return {c: None for c in campos} | {"desde_horario": 0}
 
 
+def _mas_parecida(pedida: str, libres: list[time]) -> str | None:
+    """El horario libre que más se parece a lo que la persona escribió.
+
+    Dos criterios, en este orden:
+
+    1. Tiene que estar CERCA en el tiempo (`TOLERANCIA_TIPEO`). Es el filtro
+       que decide si esto es un tipeo o un pedido distinto: a más de un cuarto
+       de hora, la persona quiso otra cosa y hay que mostrarle la lista.
+
+    2. Entre los que pasan, gana el que más caracteres comparte con lo escrito.
+       Con turnos cada 15 minutos, "09:39" está a 6 de las 09:45 y a 9 de las
+       09:30 — el más cercano en tiempo sería 09:45, pero quien escribió eso
+       quiso poner 09:30 y se le fue un dedo. El parecido de texto lo captura
+       sin tener que modelar la distancia entre teclas, que además cambia
+       según el teclado del teléfono.
+
+    Y no hace falta acertar siempre: lo que se hace con esto es PREGUNTAR.
+    Equivocarse cuesta un mensaje, no un turno mal dado.
+    """
+    pedidos_min = int(pedida[:2]) * 60 + int(pedida[3:5])
+    candidatas = [
+        h for h in libres
+        if abs(h.hour * 60 + h.minute - pedidos_min) <= TOLERANCIA_TIPEO
+    ]
+    if not candidatas:
+        return None
+
+    def parecido(h: time) -> tuple[int, int]:
+        texto = h.strftime("%H:%M")
+        iguales = sum(1 for a, b in zip(texto, pedida) if a == b)
+        distancia = abs(h.hour * 60 + h.minute - pedidos_min)
+        return (-iguales, distancia)   # más parecida primero; empata la cercana
+
+    return min(candidatas, key=parecido).strftime("%H:%M")
+
+
 def _hubo_avance(conv: Conversacion) -> bool:
     """¿La persona llegó a elegir algo, o viene mandando ruido desde el arranque?"""
     return any(conv.get(k) for k in ("servicio_id", "profesional_id",
@@ -547,9 +594,23 @@ async def _resolver(
                 return None
             consulta = await _aturno.consultar_pedido(
                 negocio, conv["servicio_id"], dia, reloj, conv.get("profesional_id"))
+
+            # ¿Se le fue la mano por unos minutos?
+            #
+            # Alguien que escribe "9:39" con turnos cada media hora no quiso
+            # decir 9:39: se le escapó un dedo. Devolverle tres opciones
+            # numeradas lo obliga a elegir otra vez algo que ya había elegido.
+            # Con una diferencia así, se le pregunta por LA que quiso.
+            #
+            # El umbral es corto a propósito. Con media hora de tolerancia esto
+            # dejaría de ser "corregí un tipeo" y pasaría a ser "te doy otra
+            # hora", que es una decisión de la persona y no del sistema.
+            sugerencia = _mas_parecida(pedida, libres)
+
             return {"_rechazo": {
                 "motivo": (consulta.motivo or MotivoNoDisponible.FUERA_DE_HORARIO).value,
                 "pedida": pedida,
+                "sugerencia": sugerencia,
                 "alternativas": [{"fecha": a.fecha.isoformat(),
                                   "hora": a.hora.strftime("%H:%M")}
                                  for a in consulta.alternativas[:3]],
@@ -725,8 +786,12 @@ async def responder(conv: Conversacion, config) -> dict:
                             hora=datetime.strptime(a["hora"], "%H:%M").time(),
                             distancia_minutos=0) for a in datos.get("alternativas", [])]
         motivo = MotivoNoDisponible(datos["motivo"]) if datos.get("motivo") else None
-        return {"respuesta": P.no_disponible(motivo, alts, datos.get("pedida")),
-                "opciones": [a["hora"] for a in datos.get("alternativas", [])]}
+        sugerida = datos.get("sugerencia")
+        # Con una sugerencia, ella es la única opción: así un "sí" no puede
+        # apuntar a otra cosa. Sin sugerencia, la lista de alternativas.
+        return {"respuesta": P.no_disponible(motivo, alts, datos.get("pedida"), sugerida),
+                "opciones": ([sugerida] if sugerida
+                             else [a["hora"] for a in datos.get("alternativas", [])])}
 
     servicios = await _aturno.listar_servicios(negocio)
     return await _pedir_paso(conv, cfg, negocio, nombre_negocio, servicios)
