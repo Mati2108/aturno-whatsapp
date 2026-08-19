@@ -312,6 +312,31 @@ def pedido_de_cambio(texto: str) -> Intencion | None:
     return None
 
 
+# Lo que dice alguien que ya pagó la seña y viene a avisarlo.
+#
+# Va como tabla y no como intención del modelo porque no necesita contexto: en
+# el único paso donde se consulta —esperando la seña— no hay otra cosa que
+# puedan significar estas frases. Y porque el clasificador se puede quedar sin
+# crédito, que es cuando más falta hace que el bot entienda "ya pagué".
+_YA_PAGUE = (
+    "ya pague", "pague", "ya lo pague", "ya la pague", "ya esta pagado",
+    "ya esta paga", "esta pagado", "lo pague", "la pague", "hice el pago",
+    "ya hice el pago", "ya transferi", "listo pague", "pague la senia",
+    "ya pague la senia", "pago hecho", "ya pagamos",
+)
+
+
+def dice_que_pago(texto: str) -> bool:
+    """¿Está avisando que ya pagó? Sin LLM.
+
+    Se compara la frase entera normalizada y no por "contiene": "todavía no
+    pagué" contiene "pague", y leerlo como un aviso de pago sería contestarle
+    lo contrario de lo que dijo.
+    """
+    limpio = _normalizar(texto)
+    return limpio in _YA_PAGUE
+
+
 def sin_contenido(texto: str) -> bool:
     """¿El mensaje no tiene ninguna letra ni número que se pueda interpretar?
 

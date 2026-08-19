@@ -46,6 +46,7 @@ from src.agentes.estados import (
     Intencion,
     anterior,
     afirmacion_sobre_lo_unico,
+    dice_que_pago,
     numero_elegido,
     opcion_por_nombre,
     es_numero_suelto,
@@ -205,6 +206,12 @@ class Conversacion(TypedDict):
     # la persona: paga en Mercado Pago, cierra la pestaña, y del lado del chat
     # lo último que leyó fue "te falta pagar".
     codigo_pendiente: NotRequired[str | None]
+
+    # Qué turno es ese, para poder anunciarlo cuando el pago aparezca. Sobrevive
+    # entre mensajes a propósito: el aviso del pago llega tarde —lo trae el
+    # vigilante, o el mensaje siguiente de la persona— y para entonces el
+    # scratch del turno (`_datos`) ya se borró.
+    turno_pendiente: NotRequired[dict | None]
 
     # Cuando la conversación pasa al negocio: en qué paso estaba y desde cuándo
     # está esperando. Sin el paso previo, volver del modo humano tiraría a la
@@ -412,11 +419,46 @@ async def avanzar(conv: Conversacion, config) -> dict:
     if estado == Estado.CONFIRMADO and intent == Intencion.SALUDO:
         return {"_plantilla": "de_nada"}
 
-    # Esperando la seña, un saludo tampoco reinicia nada: se le recuerda que
-    # falta pagar, que es lo único pendiente. Sin esto, un "hola" mientras
-    # busca la tarjeta le tiraba la lista de servicios encima del link.
-    if estado == Estado.ESPERANDO_SENIA and intent == Intencion.SALUDO:
-        return {"_plantilla": "falta_pagar"}
+    # ---- Esperando la seña: cualquier mensaje es una segunda oportunidad ----
+    #
+    # El camino normal es que el pago lo confirme el vigilante de webhook.py,
+    # que consulta cada veinte segundos. Pero ese vigilante es una tarea suelta
+    # dentro del proceso: si el servicio reinicia o redeploya mientras la
+    # persona paga, muere y NADIE vuelve a preguntar nunca. La conversación
+    # queda esperando un pago que ya entró.
+    #
+    # Pasó exactamente así: pagó, el turno no se confirmó, y escribir "ya pagué"
+    # le contestaba con la lista de servicios —porque más abajo cualquier
+    # mensaje que no fuera un saludo se leía como "empieza un pedido nuevo"—.
+    #
+    # Por eso acá, antes de decidir nada, se pregunta. Es barato (una consulta
+    # por mensaje, y sólo en este estado) y es la única forma de que el bot se
+    # recupere solo de un pago que se perdió del otro lado.
+    if estado == Estado.ESPERANDO_SENIA:
+        codigo = conv.get("codigo_pendiente")
+        pagada = None
+        if codigo:
+            try:
+                pagada = await _aturno.senia_pagada(negocio, codigo)
+            except Exception:  # noqa: BLE001 — no saber no es saber que no pagó
+                logger.warning("no se pudo consultar la seña %s", codigo, exc_info=True)
+
+        if pagada is True:
+            logger.info("la seña de %s ya estaba paga: confirmo al escribir", codigo)
+            return {
+                "estado": Estado.CONFIRMADO.value,
+                "codigo_pendiente": None,
+                "turno_pendiente": None,
+                "_plantilla": "senia_confirmada",
+                "_datos": {**(conv.get("turno_pendiente") or {}), "codigo": codigo},
+            }
+
+        # Todavía no entró. Un saludo —o cualquier forma de "ya pagué"— recibe
+        # el recordatorio, no la lista de servicios. Se resuelve con la tabla y
+        # no con el modelo por lo mismo que el resto de los atajos: es previsible
+        # y no vale gastar un token.
+        if intent == Intencion.SALUDO or dice_que_pago(conv["mensaje"]):
+            return {"_plantilla": "falta_pagar"}
 
     # Turno ya cerrado: el mensaje siguiente empieza un pedido nuevo. Se limpia
     # lo elegido pero NO quién es la persona — formulario nuevo, cliente
@@ -974,18 +1016,30 @@ async def _reservar(conv: Conversacion, cambios: dict, negocio: str, cfg: dict) 
     # de uno que todavía puede cerrarse.
     if turno.estado.value == "pendiente_de_sena":
         logger.info("turno %s esperando la seña de $%s", turno.booking_id, turno.senia)
+        # Qué turno es, para poder anunciarlo cuando el pago entre.
+        #
+        # Va en un campo propio y NO en `_datos`, aunque los mismos valores
+        # viajen por los dos lados. `_datos` es el scratch del turno: `entender`
+        # lo borra al empezar el mensaje siguiente, para que la plantilla de un
+        # mensaje no se repita en el otro. El anuncio del pago, en cambio, llega
+        # después —minutos después, o al mensaje siguiente— así que necesita un
+        # dato que sobreviva, igual que `codigo_pendiente`.
+        pendiente = {
+            "codigo": turno.codigo,
+            "servicio": turno.servicio,
+            "profesional": turno.profesional,
+            "fecha": turno.fecha.isoformat() if turno.fecha else None,
+            "hora": turno.hora.strftime("%H:%M") if turno.hora else None,
+        }
         return {
             "estado": Estado.ESPERANDO_SENIA.value,
             "nombre_del_turno": None,
             "codigo_pendiente": turno.codigo,
+            "turno_pendiente": pendiente,
             "_plantilla": "senia",
-            "_datos": {"monto": turno.senia, "link": turno.link_de_pago,
-                       "minutos": turno.minutos_de_retencion,
-                       "codigo": turno.codigo,
-                       "servicio": turno.servicio,
-                       "profesional": turno.profesional,
-                       "fecha": turno.fecha.isoformat() if turno.fecha else None,
-                       "hora": turno.hora.strftime("%H:%M") if turno.hora else None},
+            "_datos": {**pendiente, "monto": turno.senia,
+                       "link": turno.link_de_pago,
+                       "minutos": turno.minutos_de_retencion},
         }
 
     if turno.estado.value == "rechazado":
@@ -1056,6 +1110,22 @@ async def responder(conv: Conversacion, config) -> dict:
 
     if especial == "falta_pagar":
         return {"respuesta": P.falta_pagar(), "opciones": []}
+
+    if especial == "senia_confirmada":
+        # El pago ya estaba hecho y lo descubrimos al llegar este mensaje.
+        #
+        # Es la MISMA plantilla que manda el vigilante de webhook.py cuando la
+        # consulta le da que entró: la persona tiene que leer lo mismo haya
+        # escrito o no. Las fechas vuelven de `_datos`, donde las dejó el paso
+        # que creó el turno, en el formato en que sobreviven al checkpointer.
+        return {"respuesta": P.senia_confirmada(
+                    datos.get("servicio") or "Tu turno",
+                    datos.get("profesional"),
+                    date.fromisoformat(datos["fecha"]),
+                    datetime.strptime(datos["hora"], "%H:%M").time(),
+                    datos.get("codigo") or "",
+                ),
+                "opciones": []}
 
     if especial == "sin_cobro":
         return {"respuesta": P.no_se_pudo_cobrar(_link_del_negocio(negocio)),

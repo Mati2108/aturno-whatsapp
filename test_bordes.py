@@ -288,6 +288,36 @@ async def t10_la_senia(g, doble):
              "Sigo esperando el pago" in s["respuesta"],
              s["respuesta"][:45])
 
+    # Escribir mientras el pago TODAVÍA no entró no reabre el menú.
+    #
+    # Antes, cualquier mensaje que no fuera un saludo caía en "esta persona está
+    # empezando un pedido nuevo" y recibía la lista de servicios encima de un
+    # turno que seguía esperando el pago.
+    s = await g.ainvoke({"mensaje": "ya pagué"}, _cfg("t10", "Ana Pérez"))
+    chequear("«ya pagué» sin pago acreditado no reabre el menú",
+             "Sigo esperando el pago" in s["respuesta"], s["respuesta"][:45])
+    chequear("y la conversación sigue esperando la seña",
+             s["estado"] == Estado.ESPERANDO_SENIA.value, f"estado={s['estado']}")
+
+    # Y ACÁ ESTÁ EL AGUJERO QUE SE VIO EN PRODUCCIÓN.
+    #
+    # El vigilante que consulta el pago vive en el proceso: es una tarea suelta
+    # con quince minutos de presupuesto. Si el servicio reinicia o redeploya en
+    # el medio, esa tarea muere y NADIE vuelve a preguntar nunca. La persona
+    # paga, escribe "ya pagué", y el bot le contesta con la lista de servicios.
+    #
+    # Por eso el mensaje entrante tiene que ser la segunda oportunidad: antes de
+    # decidir nada, se le pregunta a aturno si el pago entró.
+    doble.marcar_senia_pagada(s["codigo_pendiente"])
+    s = await g.ainvoke({"mensaje": "ya pagué"}, _cfg("t10", "Ana Pérez"))
+    chequear("con el pago acreditado, escribir confirma el turno",
+             s["estado"] == Estado.CONFIRMADO.value, f"estado={s['estado']}")
+    chequear("y se lo dice", "Entró el pago" in s["respuesta"],
+             s["respuesta"].splitlines()[0][:45])
+    chequear("con el código del turno", "Código:" in s["respuesta"])
+    chequear("y deja de quedar un pago pendiente",
+             not s.get("codigo_pendiente"))
+
     # Y un servicio sin seña sigue confirmando derecho.
     for m in ["hola", "1", "3", "1", "1", "sí"]:
         s2 = await g.ainvoke({"mensaje": m}, _cfg("t10b", "Ana Pérez"))

@@ -112,6 +112,31 @@ class AturnoDoble(ClienteAturno):
         # número que `RETENCION_MINUTOS` en backend/src/reservas.js; está acá
         # para que las pruebas puedan mirarlo sin pegarle a aturno.
         self.minutos_de_retencion = 15
+        # código -> ¿ya entró la seña? Existe porque el pago es lo único de este
+        # flujo que NO pasa por el bot: la persona paga en Mercado Pago y aturno
+        # se entera por su webhook. Sin poder mover ese interruptor a mano, todo
+        # lo que pase DESPUÉS del pago —que es donde estuvo el bug— no se puede
+        # probar sin red.
+        self._senias: dict[str, bool] = {}
+
+    def marcar_senia_pagada(self, codigo: str) -> None:
+        """Mueve a mano lo que en producción mueve el webhook de Mercado Pago.
+
+        No es un atajo de test: es el equivalente del único evento de este flujo
+        que no entra por el bot. Que sea un método y no un dict público es para
+        que el nombre diga cuándo se usa.
+        """
+        self._senias[codigo] = True
+
+    async def senia_pagada(self, business_id: str, codigo: str) -> bool | None:
+        """`True` si entró, `False` si sigue esperando, `None` si no sé.
+
+        Los tres valores importan y son los mismos que devuelve la API real: el
+        `None` de "no sé" es lo que evita que un código desconocido se lea como
+        "no pagó" y termine en un "se venció el plazo" mandado por error a
+        alguien que sí pagó.
+        """
+        return self._senias.get(codigo)
 
     async def contacto(self, business_id: str) -> Contacto:
         """Contacto de demostración, para poder probar la derivación sin red."""
@@ -346,10 +371,12 @@ class AturnoDoble(ClienteAturno):
                     fecha=dia, hora=hora, servicio=servicio.nombre,
                     motivo_del_rechazo="no_se_pudo_cobrar_la_senia",
                 )
+            codigo = self._codigo()
+            self._senias[codigo] = False
             return TurnoConfirmado(
                 estado=EstadoDelTurno.PENDIENTE_DE_SENA,
                 booking_id=booking_id,
-                codigo=self._codigo(),
+                codigo=codigo,
                 fecha=dia, hora=hora, servicio=servicio.nombre,
                 profesional=asignado.nombre,
                 senia=servicio.senia,

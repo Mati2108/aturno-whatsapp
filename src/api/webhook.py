@@ -1194,6 +1194,9 @@ async def _marcar_confirmado(business_id: str, telefono: str, pagada: bool = Tru
         await _grafo.aupdate_state(cfg, {
             "estado": (Estado.CONFIRMADO if pagada else Estado.APERTURA).value,
             "codigo_pendiente": None,
+            # También el turno guardado: si quedara, el mensaje siguiente
+            # volvería a consultar una seña que ya se resolvió.
+            "turno_pendiente": None,
         })
     except Exception:  # noqa: BLE001
         logger.warning("no se pudo cerrar la espera de la seña", exc_info=True)
