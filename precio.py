@@ -159,7 +159,7 @@ def main() -> int:
     p.add_argument("turnos", type=int, help="turnos por mes que saca el negocio")
     p.add_argument("--canal", choices=list(CANALES), default="twilio-oct",
                    help="por dónde salen los mensajes (default: el mundo desde octubre)")
-    p.add_argument("--dolar", type=float, default=1450.0, help="pesos por dólar")
+    p.add_argument("--dolar", type=float, default=1500.0, help="pesos por dólar")
     p.add_argument("--negocios", type=int, default=1,
                    help="entre cuántos negocios se reparte el hosting")
     p.add_argument("--margen", type=float, default=4.0,
