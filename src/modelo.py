@@ -25,10 +25,35 @@ logger = logging.getLogger("pipeline.modelo")
 TEMPERATURA = 0
 
 
-def construir_modelo() -> BaseChatModel:
-    """Devuelve el chat model del proveedor configurado, con tool calling."""
+def hay_credencial(proveedor: str) -> bool:
+    """¿Este proveedor tiene con qué autenticarse?
+
+    Se pregunta ANTES de armar la cadena de respaldo, porque un proveedor
+    declarado sin clave no es un respaldo: es una segunda forma de fallar con
+    apariencia de cobertura. Ollama no lleva clave —corre local— así que
+    siempre cuenta como disponible.
+
+    No dice si la credencial SIRVE, sólo si está. Que sirva se descubre
+    intentando, que es lo que hace `/salud`.
+    """
     cfg = config()
-    proveedor = cfg.provider
+    return {
+        "ollama": True,
+        "anthropic": bool(cfg.anthropic_api_key),
+        "openai": bool(cfg.openai_api_key),
+        "gemini": bool(cfg.gemini_api_key),
+    }.get(proveedor, False)
+
+
+def construir_modelo(proveedor: str | None = None) -> BaseChatModel:
+    """Devuelve el chat model del proveedor pedido, con tool calling.
+
+    Sin argumento usa el de la config, que es el caso normal. El parámetro
+    existe para poder armar la cadena de respaldo con otro proveedor, sin tocar
+    la variable de entorno ni ningún estado global.
+    """
+    cfg = config()
+    proveedor = proveedor or cfg.provider
 
     if proveedor == "ollama":
         from langchain_ollama import ChatOllama

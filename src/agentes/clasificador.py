@@ -22,12 +22,14 @@ DOS CANDADOS
 from __future__ import annotations
 
 import logging
+import time
 
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
 from src.agentes.estados import Estado, Intencion
-from src.modelo import construir_modelo
+from src.config import config
+from src.modelo import construir_modelo, hay_credencial
 
 logger = logging.getLogger("pipeline.clasificador")
 
@@ -90,15 +92,69 @@ Reglas de extracción:
 """
 
 
-def construir_clasificador():
+def construir_clasificador(proveedor: str | None = None):
     """Devuelve la cadena. Se arma una vez y se reusa."""
     prompt = ChatPromptTemplate.from_messages(
         [("system", INSTRUCCIONES), ("human", "{mensaje}")]
     )
     # temperature=0 y salida estructurada: la misma frase clasifica igual
     # siempre. En un flujo de turnos, la variabilidad no aporta nada.
-    modelo = construir_modelo().with_structured_output(Clasificacion)
+    modelo = construir_modelo(proveedor).with_structured_output(Clasificacion)
     return prompt | modelo
+
+
+def construir_respaldos() -> list[tuple[str, object]]:
+    """Las cadenas de respaldo, en orden, para cuando el principal no conteste.
+
+    Se arman AL ARRANCAR y no en el momento de la falla: armar una cadena
+    importa una librería y construye un cliente, y el momento en que el
+    proveedor principal se cayó es el peor para descubrir que falta un paquete.
+
+    Un proveedor declarado sin credencial se saltea acá, con un aviso. Es lo que
+    evita que la cadena de respaldo sea una lista de nombres incapaz de disparar
+    ninguno — que es exactamente cómo se ve la cobertura falsa.
+    """
+    salida = []
+    for nombre in config().respaldos():
+        if not hay_credencial(nombre):
+            logger.warning("respaldo %s declarado pero sin credencial: lo salteo", nombre)
+            continue
+        try:
+            salida.append((nombre, construir_clasificador(nombre)))
+        except Exception as e:  # noqa: BLE001 — un respaldo roto no tumba el arranque
+            logger.error("no se pudo armar el respaldo %s: %s", nombre, e)
+    if salida:
+        logger.info("respaldo del clasificador: %s", ", ".join(n for n, _ in salida))
+    return salida
+
+
+# Cuánto se deja de intentar con el principal después de que falle.
+#
+# Sin esto, con el proveedor caído CADA mensaje paga la llamada fallida antes de
+# ir al respaldo: esa latencia se le suma a todas las conversaciones y el mismo
+# error se repite en el log tantas veces como mensajes haya. Con esto se paga
+# una vez y se vuelve a probar recién pasado el rato — porque la caída también
+# se termina, y quedarse en el respaldo para siempre sería la otra forma de
+# equivocarse.
+DESCANSO_TRAS_FALLA = 300  # segundos
+
+_principal_caido_hasta = 0.0
+
+
+def principal_disponible(ahora: float | None = None) -> bool:
+    """¿Se puede volver a intentar con el proveedor principal?"""
+    return (ahora if ahora is not None else time.monotonic()) >= _principal_caido_hasta
+
+
+def _anotar_falla(ahora: float | None = None) -> None:
+    global _principal_caido_hasta
+    _principal_caido_hasta = (
+        ahora if ahora is not None else time.monotonic()) + DESCANSO_TRAS_FALLA
+
+
+def _anotar_exito() -> None:
+    global _principal_caido_hasta
+    _principal_caido_hasta = 0.0
 
 
 async def clasificar(
@@ -109,32 +165,58 @@ async def clasificar(
     hoy_iso: str,
     dia_semana: str,
     calendario: str,
+    respaldos: list[tuple[str, object]] | None = None,
 ) -> Clasificacion:
-    """Clasifica, y ante cualquier falla devuelve DESCONOCIDO.
+    """Clasifica. Si el principal no contesta prueba el respaldo, y si no, DESCONOCIDO.
 
     Nunca propaga la excepción: un modelo caído o una respuesta rara no pueden
     dejar sin contestar a la persona. La máquina de estados sabe qué hacer con
-    DESCONOCIDO — repetir el pedido del paso actual — y eso siempre es mejor
-    que un error.
-    """
-    texto_opciones = ""
-    if opciones:
-        texto_opciones = "Opciones válidas ahora: " + "; ".join(opciones) + "\n"
+    DESCONOCIDO —repetir el pedido del paso actual— y eso siempre es mejor que
+    un error.
 
-    try:
-        resultado = await cadena.ainvoke({
-            "mensaje": mensaje,
-            "estado": estado.value,
-            "opciones": texto_opciones,
-            "hoy": hoy_iso,
-            "dia_semana": dia_semana,
-            "calendario": calendario,
-        })
-        logger.info(
-            "clasificado [%s] '%s' → %s",
-            estado.value, mensaje[:32], resultado.intent.value,
-        )
-        return resultado
-    except Exception as e:  # noqa: BLE001 — el flujo nunca se corta por esto
-        logger.warning("El clasificador falló (%s); sigo con DESCONOCIDO", e)
-        return Clasificacion(intent=Intencion.DESCONOCIDO)
+    Pero DESCONOCIDO para TODO tampoco es funcionar. Con el proveedor caído el
+    bot recibe y no entiende nada, y como el paso del nombre sale únicamente de
+    acá, un cliente nuevo no puede sacar turno: se traba y termina derivado a
+    una persona. Pasó, y por lo más tonto —se acabó el crédito de la cuenta—,
+    que además ningún chequeo de credenciales agarra, porque la clave es válida.
+
+    Por eso el respaldo es OTRO proveedor y no un reintento: reintentar contra
+    una cuenta sin crédito falla igual las tres veces.
+    """
+    datos = {
+        "mensaje": mensaje,
+        "estado": estado.value,
+        "opciones": ("Opciones válidas ahora: " + "; ".join(opciones) + "\n")
+                    if opciones else "",
+        "hoy": hoy_iso,
+        "dia_semana": dia_semana,
+        "calendario": calendario,
+    }
+
+    # Al principal se le pregunta salvo que acabe de fallar. Ver el comentario
+    # de DESCANSO_TRAS_FALLA: con el proveedor caído, insistir en cada mensaje
+    # le suma su timeout a todas las conversaciones.
+    if principal_disponible():
+        try:
+            resultado = await cadena.ainvoke(datos)
+            _anotar_exito()
+            logger.info("clasificado [%s] '%s' → %s",
+                        estado.value, mensaje[:32], resultado.intent.value)
+            return resultado
+        except Exception as e:  # noqa: BLE001 — el flujo nunca se corta por esto
+            _anotar_falla()
+            logger.warning("El clasificador principal falló (%s)", e)
+
+    for nombre, respaldo in (respaldos or []):
+        try:
+            resultado = await respaldo.ainvoke(datos)
+            # WARNING y no INFO: que el bot esté andando con el respaldo es algo
+            # que alguien tiene que ver en los logs. Funciona, pero no está bien.
+            logger.warning("clasificado POR RESPALDO (%s) [%s] '%s' → %s",
+                           nombre, estado.value, mensaje[:32], resultado.intent.value)
+            return resultado
+        except Exception as e:  # noqa: BLE001 — se prueba el siguiente
+            logger.error("el respaldo %s también falló (%s)", nombre, e)
+
+    logger.warning("no contestó ningún proveedor; sigo con DESCONOCIDO")
+    return Clasificacion(intent=Intencion.DESCONOCIDO)

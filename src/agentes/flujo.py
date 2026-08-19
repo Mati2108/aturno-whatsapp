@@ -36,7 +36,8 @@ from langgraph.graph import END, START, StateGraph
 from typing_extensions import NotRequired, TypedDict
 
 from src import plantillas as P
-from src.agentes.clasificador import Clasificacion, clasificar, construir_clasificador
+from src.agentes.clasificador import (
+    Clasificacion, clasificar, construir_clasificador, construir_respaldos)
 from src.agentes.estados import (
     AVANZA_CON,
     ELIGE_DE_LISTA,
@@ -118,12 +119,16 @@ PAGINA = 8
 _aturno: ClienteAturno | None = None
 _recuperadores: dict[str, Recuperador] = {}
 _clasificador = None
+# Las cadenas de otros proveedores, para cuando el principal no conteste. Se
+# arman al configurar y no en el momento de la falla: ver `construir_respaldos`.
+_respaldos: list[tuple[str, object]] = []
 
 
 def configurar(cliente: ClienteAturno) -> None:
-    global _aturno, _clasificador
+    global _aturno, _clasificador, _respaldos
     _aturno = cliente
     _clasificador = construir_clasificador()
+    _respaldos = construir_respaldos()
 
 
 def _rag(business_id: str) -> Recuperador:
@@ -323,6 +328,7 @@ async def entender(conv: Conversacion, config) -> dict:
     resultado: Clasificacion = await clasificar(
         _clasificador, texto, estado, opciones,
         hoy.isoformat(), DIAS_ES[hoy.weekday()], cfg.get("calendario", ""),
+        respaldos=_respaldos,
     )
     return {
         **limpio_turno,

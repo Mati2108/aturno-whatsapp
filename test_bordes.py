@@ -341,6 +341,77 @@ async def t12_el_aviso_del_pago():
     chequear("y ofrece volver a intentar", "escribime" in vencida)
 
 
+async def t13_failover_del_modelo():
+    print(f"\n{NEGRITA}[13] SI EL PROVEEDOR SE CAE, CONTESTA EL RESPALDO{FIN}")
+    print(f"{GRIS}  Pasó: se acabó el crédito y ningún cliente nuevo pudo sacar turno.{FIN}")
+
+    from src.agentes import clasificador as C
+
+    class CadenaFalsa:
+        """Un clasificador de mentira, para probar el failover sin red."""
+
+        def __init__(self, devuelve=None, explota=False):
+            self.devuelve, self.explota, self.llamadas = devuelve, explota, 0
+
+        async def ainvoke(self, _datos):
+            self.llamadas += 1
+            if self.explota:
+                raise RuntimeError("credit balance is too low")
+            return C.Clasificacion(intent=self.devuelve)
+
+    async def clasificar(principal, respaldos):
+        return await C.clasificar(principal, "Ana Pérez", Estado.ESPERANDO_NOMBRE,
+                                  None, "2026-08-18", "martes", "", respaldos=respaldos)
+
+    # 1. El principal anda: el respaldo ni se toca.
+    C._anotar_exito()
+    bueno, respaldo = CadenaFalsa(Intencion.DAR_NOMBRE), CadenaFalsa(Intencion.SALUDO)
+    r = await clasificar(bueno, [("gemini", respaldo)])
+    chequear("con el principal sano contesta el principal", r.intent == Intencion.DAR_NOMBRE)
+    chequear("y no se le pregunta al respaldo", respaldo.llamadas == 0)
+
+    # 2. El principal se cae: contesta el respaldo, no DESCONOCIDO.
+    C._anotar_exito()
+    muerto, respaldo = CadenaFalsa(explota=True), CadenaFalsa(Intencion.DAR_NOMBRE)
+    r = await clasificar(muerto, [("gemini", respaldo)])
+    chequear("con el principal caído contesta el respaldo",
+             r.intent == Intencion.DAR_NOMBRE, f"intent={r.intent.value}")
+    chequear("y el respaldo se usó una vez", respaldo.llamadas == 1)
+
+    # 3. Y en los mensajes siguientes NO se vuelve a pagar la llamada fallida.
+    #    Sin esto, con el proveedor caído cada mensaje paga su timeout.
+    llamadas_antes = muerto.llamadas
+    r = await clasificar(muerto, [("gemini", respaldo)])
+    chequear("el principal caído no se reintenta en cada mensaje",
+             muerto.llamadas == llamadas_antes,
+             f"lo llamó {muerto.llamadas - llamadas_antes} vez más")
+    chequear("y la respuesta sigue saliendo por el respaldo",
+             r.intent == Intencion.DAR_NOMBRE)
+
+    # 4. Pasado el descanso se vuelve a probar: la caída también se termina.
+    chequear("mientras dura el descanso, el principal queda afuera",
+             not C.principal_disponible(0),
+             "medido con el reloj inyectado, sin esperar")
+    chequear("pasado el descanso se lo vuelve a intentar",
+             C.principal_disponible(10 ** 9))
+
+    # 5. Sin ningún respaldo que conteste, la respuesta sigue siendo DESCONOCIDO
+    #    y no una excepción: la persona nunca se queda sin respuesta.
+    C._anotar_exito()
+    r = await clasificar(CadenaFalsa(explota=True), [("gemini", CadenaFalsa(explota=True))])
+    chequear("si tampoco contesta el respaldo, cae en DESCONOCIDO",
+             r.intent == Intencion.DESCONOCIDO)
+    C._anotar_exito()
+
+    # 6. Un respaldo declarado sin credencial NO cuenta como respaldo. Es la
+    #    diferencia entre cobertura y la apariencia de cobertura.
+    from src.modelo import hay_credencial
+    chequear("un proveedor sin clave no se toma como respaldo",
+             not hay_credencial("openai"),
+             "hoy OPENAI_API_KEY está vacía, así que no entra en la cadena")
+    chequear("y el que tiene clave sí", hay_credencial("gemini"))
+
+
 async def t9_el_borde_del_webhook():
     print(f"\n{NEGRITA}[9] LA PUERTA DE ENTRADA: NADIE SE QUEDA SIN RESPUESTA{FIN}")
 
@@ -388,6 +459,7 @@ async def main():
     await t10_la_senia(g, doble)
     await t11_sin_link_no_hay_turno(g, doble)
     await t12_el_aviso_del_pago()
+    await t13_failover_del_modelo()
 
     print(f"\n{'─' * 58}")
     print(f"{VERDE}Todo en verde.{FIN}" if ok else f"{ROJO}Hay bordes rotos.{FIN}")

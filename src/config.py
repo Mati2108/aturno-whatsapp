@@ -38,6 +38,34 @@ class Config(BaseSettings):
     openai_api_key: str = ""
     gemini_api_key: str = ""
 
+    # A quién recurrir si el proveedor principal no contesta. Lista separada por
+    # comas, en orden; vacío apaga el respaldo.
+    #
+    # POR QUÉ EXISTE
+    # Pasó: se acabó el crédito de la cuenta de Anthropic y el bot siguió
+    # respondiendo HTTP, pero el clasificador fallaba en CADA mensaje y caía en
+    # DESCONOCIDO. O sea que el bot recibía y no entendía nada, y como el paso
+    # del nombre depende del modelo, ningún cliente nuevo podía sacar un turno.
+    # No es un error de credencial —la clave es válida— así que ningún chequeo
+    # de "¿está la API key?" lo agarra.
+    #
+    # POR QUÉ GEMINI Y NO OTRO
+    # Lo que hay que cubrir es que se corte la facturación, y dos proveedores
+    # pagados con la misma tarjeta se caen juntos: el respaldo tiene que ser
+    # otra cuenta. Gemini además ya es obligatorio para los embeddings, así que
+    # su clave está cargada por construcción y el respaldo no depende de que
+    # alguien se acuerde de configurar algo.
+    #
+    # Un proveedor sin clave se saltea en silencio: declararlo acá no alcanza
+    # para que exista, y un respaldo que no puede dispararse es peor que
+    # ninguno, porque parece cobertura.
+    provider_respaldo: str = "gemini"
+
+    def respaldos(self) -> list[str]:
+        """Los proveedores de respaldo, en orden y sin el principal."""
+        pedidos = [p.strip() for p in self.provider_respaldo.split(",") if p.strip()]
+        return [p for p in pedidos if p != self.provider]
+
     # ---- Persistencia ----
     # El checkpointer de LangGraph. Postgres y no SQLite desde el arranque:
     # SQLite bloquea con escrituras concurrentes y no sirve con más de una

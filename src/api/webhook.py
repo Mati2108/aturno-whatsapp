@@ -53,6 +53,7 @@ from src.config import TENANTS, config, tenant_por_numero
 from src.fechas import ahora, calendario
 from src import plantillas as P
 from src.observabilidad import configurar_trazas, trazado_activo
+from src.modelo import construir_modelo, hay_credencial
 from src.rag.indice import modelo_en_uso, reindexar_negocio
 from src.schemas import MensajeEntrante, Tenant
 
@@ -386,6 +387,12 @@ class Salud(BaseModel):
     )
     firma_validada: bool = Field(description="Si se verifica la firma de Twilio.")
     trazado: bool = Field(description="Si las trazas van a Phoenix.")
+    respondiendo: str = Field(
+        default="",
+        description="Qué proveedor contestó recién. Distinto de `proveedor_llm` "
+                    "significa que el principal está caído y atiende el respaldo.")
+    respaldos: str = Field(
+        default="", description="A quién se recurre si el principal no contesta.")
 
 
 @app.post("/panel/responder", response_model=Enviado)
@@ -595,7 +602,7 @@ def _hay_indice() -> bool:
         return False
 
 
-async def _llm_responde() -> tuple[bool, str]:
+async def _llm_responde() -> tuple[bool, str, str]:
     """¿El LLM contesta? Una llamada mínima, de un token.
 
     Existe porque /salud decía "ok" con el modelo caído. El servicio estaba
@@ -610,35 +617,53 @@ async def _llm_responde() -> tuple[bool, str]:
 
     Un chequeo de salud que no mira lo que hace falta para funcionar es peor
     que ninguno: da confianza falsa justo cuando hay que ir a mirar.
+
+    Prueba el proveedor CONFIGURADO y, si no contesta, los de respaldo. Antes
+    preguntaba siempre por Anthropic, con el cliente de Anthropic importado a
+    mano, sin importar qué dijera PROVIDER: con el bot corriendo por Gemini
+    —que es lo que pasa mientras la cuenta principal no tenga crédito— este
+    chequeo habría informado la salud de un proveedor que no se está usando.
+
+    Devuelve QUIÉN contestó, porque no es lo mismo estar en pie que estar en
+    pie por el respaldo: lo segundo funciona pero hay que ir a arreglarlo.
     """
-    cfg = config()
-    try:
-        import anthropic
-        await anthropic.AsyncAnthropic(api_key=cfg.anthropic_api_key).messages.create(
-            model=cfg.anthropic_modelo, max_tokens=1,
-            messages=[{"role": "user", "content": "."}])
-        return True, ""
-    except Exception as e:  # noqa: BLE001
-        texto = str(e)
-        if "credit balance" in texto or "billing" in texto.lower():
-            return False, "sin crédito en la cuenta del modelo"
-        if "401" in texto or "authentication" in texto.lower():
-            return False, "la clave del modelo no es válida"
-        if "429" in texto:
-            return False, "el modelo está limitando por cantidad de pedidos"
-        return False, texto[:80]
+    for nombre in [config().provider, *config().respaldos()]:
+        if not hay_credencial(nombre):
+            continue
+        try:
+            await construir_modelo(nombre).ainvoke(".")
+            return True, nombre, ""
+        except Exception as e:  # noqa: BLE001
+            texto = str(e)
+            if "credit balance" in texto or "billing" in texto.lower():
+                detalle = "sin crédito en la cuenta del modelo"
+            elif "401" in texto or "authentication" in texto.lower():
+                detalle = "la clave del modelo no es válida"
+            elif "429" in texto:
+                detalle = "el modelo está limitando por cantidad de pedidos"
+            else:
+                detalle = texto[:80]
+            logger.warning("el proveedor %s no contesta: %s", nombre, detalle)
+            ultimo = f"{nombre}: {detalle}"
+    return False, "", locals().get("ultimo", "no hay ningún proveedor con credencial")
 
 
 @app.get("/salud", response_model=Salud)
 async def salud() -> Salud:
     """Chequeo rápido: ¿está vivo, y además puede hacer su trabajo?"""
     cfg = config()
-    piensa, detalle = await _llm_responde()
+    piensa, quien, detalle = await _llm_responde()
+    por_respaldo = piensa and quien != cfg.provider
     return Salud(
-        estado="ok" if piensa else "degradado",
+        # "degradado" también cuando contesta el respaldo: el bot atiende, pero
+        # el proveedor que el negocio eligió está caído y alguien tiene que ir a
+        # verlo. Un verde acá sería el mismo silencio que ya escondió una caída.
+        estado="ok" if (piensa and not por_respaldo) else "degradado",
         puede_responder=piensa,
-        detalle=detalle,
+        detalle=(f"contestando por el respaldo ({quien})" if por_respaldo else detalle),
         proveedor_llm=cfg.provider,
+        respondiendo=quien,
+        respaldos=", ".join(cfg.respaldos()) or "ninguno",
         embeddings=modelo_en_uso().split("/")[-1],
         aturno_modo=cfg.aturno_modo,
         numero=cfg.twilio_whatsapp_number,
