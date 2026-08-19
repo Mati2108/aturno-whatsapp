@@ -59,7 +59,12 @@ async def main() -> None:
             if not en3:
                 fallos.append(f"[{negocio}] {pregunta}")
             marca = "✓" if en1 else ("~" if en3 else "✗")
-            print(f"  {marca} {pregunta:<34} → {secciones[0]}")
+            # "nada" y no `secciones[0]`: cuando ninguna sección pasa el umbral
+            # la lista viene vacía, y ese es justamente el resultado que hay que
+            # poder leer. Indexando a ciegas, la evaluación entera se caía con
+            # un IndexError en la primera pregunta sin respuesta — o sea que el
+            # instrumento se rompía exactamente cuando había algo que medir.
+            print(f"  {marca} {pregunta:<34} → {secciones[0] if secciones else 'nada'}")
 
     print("\n" + "=" * 64)
     print(f"  top-1: {aciertos1}/{total}    top-3: {aciertos3}/{total}")

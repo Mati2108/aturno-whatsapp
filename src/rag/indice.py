@@ -94,12 +94,31 @@ MODELO_API = "models/gemini-embedding-001"
 # puntajes no son comparables entre modelos.
 UMBRAL = 0.60
 
-# Cuántos fragmentos como máximo entran en una respuesta. En la medición, para
-# toda pregunta con respuesta el segundo fragmento ya quedaba en 0.588 o menos,
-# o sea que el umbral por sí solo devuelve uno. El tope está para el caso en
-# que una respuesta quede repartida en dos secciones, y para que nunca vuelva a
-# salir el chorizo de tres bloques que recibía la persona antes.
+# Cuántos fragmentos como máximo entran en una respuesta.
 MAX_FRAGMENTOS = 2
+
+# Cuánto puede estar por debajo del mejor un fragmento para que igual se mande.
+#
+# El tope de arriba no alcanza desde que los fragmentos son por pregunta y no
+# por sección: el segundo mejor ya no es "más de lo mismo", es OTRA pregunta de
+# la misma sección. Preguntabas por el colectivo y abajo te venía dónde
+# estacionar.
+#
+# El número sale de medir contra el conocimiento real de un negocio. Distancia
+# entre el primero y el segundo:
+#
+#     qué colectivos paran cerca      0.699 → 0.621   0.078
+#     puedo pagar con débito          0.645 → 0.550   0.095
+#     dónde quedan                    0.609 → 0.569   0.040
+#     con cuánta anticipación         0.774 → 0.659   0.115
+#     tienen wifi                     0.703 → 0.552   0.151
+#     hay estacionamiento             0.665 → 0.661   0.004   ← las dos sirven
+#
+# El último es el caso que justifica que esto no sea "mandá uno y listo": el
+# negocio cargó "tenemos cochera propia" y "si no, en tal calle" como dos
+# respuestas, y las dos contestan la pregunta. Empatan porque de verdad empatan.
+# Con 0.02 ese par sobrevive entero y todos los demás segundos se caen.
+MARGEN = 0.02
 
 
 class EmbeddingsLocales(Embeddings):
@@ -158,8 +177,73 @@ def modelo_en_uso() -> str:
     return MODELO_LOCAL if config().embeddings_modo == "local" else MODELO_API
 
 
+def _por_pregunta(seccion: Document) -> list[Document]:
+    """Parte una sección en una unidad por cada pregunta que contesta.
+
+    POR QUÉ NO ALCANZA CON CORTAR POR `##`
+    El panel escribe MUCHAS preguntas dentro de una misma sección. "Cómo llegar"
+    trae la dirección, la referencia, los colectivos, el estacionamiento y la
+    accesibilidad, cada una con su línea `>`. Con la sección entera como un solo
+    fragmento se rompen las dos mitades del trabajo:
+
+      · ENCONTRAR — el vector de un fragmento que habla de cinco cosas no se
+        parece lo suficiente a ninguna de las cinco. Medido contra el
+        conocimiento real de un negocio: "dónde quedan" no recuperaba NADA,
+        teniendo la dirección cargada y esas dos palabras escritas como
+        sinónimo. El umbral las descartaba por dilución.
+      · CONTESTAR — cuando sí pegaba, el bot contestaba las cinco: preguntabas
+        qué colectivo te deja cerca y recibías la dirección, la referencia, la
+        cochera y la rampa, todo junto y sin decir cuál era cuál.
+
+    La unidad de sentido no es la sección: es una pregunta y su respuesta. Eso
+    es exactamente lo que la línea `>` delimita.
+
+    Una sección SIN líneas `>` —los .md escritos a mano— vuelve entera, como
+    antes. No hay nada que partir ahí, y el formato viejo tiene que seguir
+    funcionando.
+    """
+    lineas = seccion.page_content.splitlines()
+    encabezados = [l for l in lineas if l.lstrip().startswith("#")]
+
+    grupos: list[list[str]] = []
+    suelto: list[str] = []          # texto antes de la primera pregunta
+    actual: list[str] | None = None
+    for linea in lineas:
+        if linea.lstrip().startswith("#"):
+            continue
+        if linea.lstrip().startswith(">"):
+            actual = [linea]
+            grupos.append(actual)
+        elif actual is None:
+            suelto.append(linea)
+        else:
+            actual.append(linea)
+
+    if not grupos:
+        return [seccion]
+
+    def armar(cuerpo: list[str]) -> Document:
+        return Document(page_content="\n".join([*encabezados, *cuerpo]).strip(),
+                        metadata=dict(seccion.metadata))
+
+    docs = []
+    if "".join(suelto).strip():
+        # Prosa suelta antes de las preguntas: se conserva como fragmento
+        # propio. Tirarla sería perder texto que alguien escribió a mano.
+        docs.append(armar(suelto))
+    for grupo in grupos:
+        # Una pregunta sin responder no se indexa: recuperarla sería traer un
+        # fragmento cuya respuesta está vacía, o sea contestar con la nada.
+        if "".join(grupo[1:]).strip():
+            docs.append(armar(grupo))
+    return docs
+
+
 def _fragmentar(texto: str, business_id: str) -> list[Document]:
-    """Parte un documento por encabezados y le estampa el negocio a cada trozo.
+    """Parte un documento en unidades buscables y le estampa el negocio a cada una.
+
+    Dos cortes, en este orden: por encabezado `##` (la sección) y, adentro, por
+    cada pregunta `>` que el panel haya escrito. Ver `_por_pregunta`.
 
     El `business_id` va en los metadatos de CADA fragmento, no del documento:
     Chroma filtra por metadatos del fragmento, así que si se estampa en el nivel
@@ -169,15 +253,15 @@ def _fragmentar(texto: str, business_id: str) -> list[Document]:
         headers_to_split_on=[("#", "titulo"), ("##", "seccion")],
         strip_headers=False,
     )
-    fragmentos = partidor.split_text(texto)
+    # Los fragmentos sin `##` (el preámbulo del archivo) no responden ninguna
+    # pregunta del cliente; los descartamos para no ensuciar la recuperación.
+    secciones = [f for f in partidor.split_text(texto) if f.metadata.get("seccion")]
 
+    fragmentos = [d for s in secciones for d in _por_pregunta(s)]
     for f in fragmentos:
         f.metadata["business_id"] = business_id
         f.metadata["fuente"] = f"{business_id}.md"
-
-    # Los fragmentos sin `##` (el preámbulo del archivo) no responden ninguna
-    # pregunta del cliente; los descartamos para no ensuciar la recuperación.
-    return [f for f in fragmentos if f.metadata.get("seccion")]
+    return fragmentos
 
 
 def construir_indice(recrear: bool = False) -> Chroma:
@@ -306,7 +390,12 @@ class Recuperador:
             k=self._k,
             filter={"business_id": self._business_id},
         )
-        resultados = [d for d, puntaje in crudos if puntaje >= UMBRAL][:MAX_FRAGMENTOS]
+        pasan = [(d, p) for d, p in crudos if p >= UMBRAL]
+        # Del que pasó el umbral, el mejor siempre; los demás sólo si vienen
+        # pegados. Ver `MARGEN`: lo que se descarta acá no es ruido de la
+        # búsqueda, es la respuesta a OTRA pregunta.
+        resultados = [d for d, p in pasan
+                      if p >= pasan[0][1] - MARGEN][:MAX_FRAGMENTOS] if pasan else []
         logger.info(
             "RAG [%s] '%s' → %d de %d (mejor %.3f): %s",
             self._business_id,
@@ -331,18 +420,43 @@ class Recuperador:
         confunden fácil: lo que devuelve esto se le manda al cliente TAL CUAL,
         sin que un modelo lo reescriba. Un bot que repite tu pregunta antes de
         contestarla suena a formulario, no a alguien atendiendo.
+
+        Con los encabezados pasa lo mismo, y por eso tampoco salen enteros:
+
+        · El `#` del documento es el nombre del negocio. La persona le está
+          escribiendo a ese negocio; firmarle cada respuesta con su propio
+          nombre no le dice nada.
+        · El `##` de la sección sí ubica —"Cómo llegar" antes de una
+          dirección se lee bien— pero UNA vez. Desde que los fragmentos son
+          por pregunta, dos respuestas de la misma sección repetían el mismo
+          título dos veces en el mismo mensaje.
         """
         docs = await self.buscar(consulta)
         if not docs:
             return ""
+
         limpios = []
+        titulos_puestos: set[str] = set()
         for d in docs:
-            visible = "\n".join(
-                l for l in d.page_content.splitlines() if not l.lstrip().startswith(">")
-            ).strip()
-            if visible:
-                limpios.append(visible)
-        return "\n\n---\n\n".join(limpios)
+            visible = []
+            for linea in d.page_content.splitlines():
+                pelada = linea.lstrip()
+                if pelada.startswith(">"):
+                    continue
+                if pelada.startswith("##"):
+                    titulo = pelada.lstrip("#").strip()
+                    if titulo in titulos_puestos:
+                        continue
+                    titulos_puestos.add(titulo)
+                    visible.append(titulo)
+                    continue
+                if pelada.startswith("#"):
+                    continue  # el nombre del negocio
+                visible.append(linea)
+            texto = "\n".join(visible).strip()
+            if texto:
+                limpios.append(texto)
+        return "\n\n".join(limpios)
 
 
 if __name__ == "__main__":
