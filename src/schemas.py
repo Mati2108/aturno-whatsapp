@@ -44,6 +44,16 @@ class Tenant(BaseModel):
     # correcto; con el Sandbox de Twilio hay uno solo para todos.
     numero_whatsapp: str = Field(min_length=1)
 
+    # Lo que devuelve el Embedded Signup de Meta cuando el negocio conecta su
+    # WhatsApp, y que vive en aturno. Vacíos mientras el canal sea Twilio.
+    #
+    # El token es POR NEGOCIO y no hay uno global: con Coexistencia cada uno
+    # conecta su propia cuenta, y es lo que hace que Meta le facture a él los
+    # mensajes en vez de a nosotros.
+    phone_number_id: str = ""
+    token_whatsapp: str = ""
+    waba_id: str = ""
+
 
 # ---------- Lo que entra por el webhook ----------
 

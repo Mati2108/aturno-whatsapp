@@ -137,6 +137,31 @@ class Config(BaseSettings):
     # es que Twilio entregue.
     twilio_modo: str = "api"
 
+    # ---- Canal de WhatsApp ----
+    # "twilio" (el sandbox de hoy) | "meta" (Cloud API, un número por negocio)
+    #
+    # Mismo patrón que `aturno_modo` y `twilio_modo`: una variable decide con
+    # quién se habla y el resto del sistema no se entera. Ver src/canal/base.py.
+    canal: str = "twilio"
+
+    # El secreto de la app de Meta, con el que se firma cada webhook. NO es el
+    # token de un negocio: ese es por negocio y sale del Embedded Signup.
+    #
+    # Sin esto, el canal de Meta rechaza todos los webhooks a propósito: un
+    # webhook público sin firma es una puerta para que cualquiera invente
+    # turnos, y fallar cerrado es la única forma de que se note.
+    meta_app_secret: str = ""
+
+    # Lo que Meta manda en el `hub.verify_token` al dar de alta el webhook. Lo
+    # elegís vos: sólo tiene que coincidir entre la consola de Meta y esto.
+    meta_verify_token: str = ""
+
+    # La plantilla aprobada para hablarle a alguien fuera de la ventana de 24 h
+    # —el dueño contestando desde el panel al día siguiente, típicamente—.
+    # Vacía = no se intenta, y ese mensaje queda en el log en vez de perderse
+    # en silencio creyendo que salió.
+    plantilla_reanudar: str = ""
+
     # ---- Embeddings ----
     # "api" (Gemini, sin memoria) | "local" (fastembed, +805 MB, sin red)
     embeddings_modo: str = "api"
