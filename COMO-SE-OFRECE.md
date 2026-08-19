@@ -32,9 +32,9 @@ por mes y por negocio.
 Medido con `medir_costo.py` sobre cuatro conversaciones completas, contando lo
 que el proveedor factura:
 
-    US$ 0,0052 por turno    (4.334 tokens de entrada, 167 de salida)
+    US$ 0,00176 por turno    (1.468 tokens de entrada, 58 de salida)
 
-Un negocio que saque **400 turnos por mes** gasta **US$ 2,07 mensuales** en
+Un negocio que saque **400 turnos por mes** gasta **US$ 0,70 mensuales** en
 modelo. Contra un salto de plan de 10.000 pesos, el costo del modelo es ruido.
 
 Cómo se llegó ahí, porque no fue gratis:
@@ -42,7 +42,8 @@ Cómo se llegó ahí, porque no fue gratis:
 | | por turno | mensajes que evitan el LLM |
 |---|---:|---:|
 | Al principio | US$ 0,0090 | 44% |
-| Después de optimizar | **US$ 0,0052** | **71%** |
+| Primera optimización | US$ 0,0052 | 71% |
+| **Hoy** | **US$ 0,00176** | **88%** |
 
 Las dos cosas que lo bajaron:
 
@@ -66,12 +67,29 @@ de Meta, los **mensajes de servicio** —las respuestas dentro de la ventana de
 24 h que abre el cliente— **no cuestan nada**, y este bot no manda otra cosa:
 cada mensaje suyo responde a alguien que escribió primero.
 
-    modelo .......... US$ 0,0052 por turno   (medido)
-    entrega Twilio .. varias veces eso       (a confirmar con la tarifa vigente)
-    entrega Meta .... 0                      (mensajes de servicio)
+    modelo .......... US$ 0,00176 por turno   (medido)
+    entrega Twilio .. US$ 0,085   por turno   (17 mensajes × 0,005 — supuesto)
+    entrega Meta .... 0                       (mensajes de servicio)
 
-**Migrar a Meta no es una mejora técnica: es lo que vuelve el costo variable
-casi cero.** Está en `PENDIENTES.md` con el detalle de lo que implica.
+**La entrega por Twilio cuesta 48 veces lo que cuesta el modelo.**
+
+Corrido con `precio.py`, el número que faltaba —hasta cuántos turnos aguanta
+el precio del plan— sale así:
+
+| Canal | 400 turnos/mes | margen contra +10.000 | techo del plan |
+|---|---:|---:|---:|
+| Twilio | US$ 48,70 | **−41,81** 🔴 | ninguno: pierde desde el turno 1 |
+| Meta (hosting ÷ 20) | US$ 1,40 | **+5,49** (5×) 🟢 | **3.521 turnos/mes** |
+
+Con Twilio el plan **no cierra a ningún volumen**: la entrega sola se come
+varias veces el salto de precio. Con Meta cierra con margen de 3 a 8 veces y
+sobra techo para el negocio más grande que uno pueda conseguir.
+
+**Migrar a Meta no es una mejora técnica: es lo que vuelve vendible el
+producto.** Está en `PENDIENTES.md` con el detalle de lo que implica.
+
+    python precio.py 400            # con Twilio
+    python precio.py 400 --meta --negocios 20
 
 Lo tercero, el hosting, es fijo y se comparte entre todos los negocios: un plan
 de Render que no duerma. No escala con la cantidad de clientes.
