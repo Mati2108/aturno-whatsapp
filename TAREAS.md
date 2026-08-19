@@ -229,6 +229,53 @@ que llega es la respuesta a lo que preguntaron y nada más. No hizo falta la
 opción B ni la C — el modelo sigue sin redactar una sola palabra de lo que lee
 la persona.
 
+## 🟢 6 · ✅ Que el crédito de la API rinda más
+
+Medido con `medir_costo.py` antes y después, y con `count_tokens` de la API.
+
+| | Antes | Después |
+|---|---:|---:|
+| por turno reservado | 0,00432 USD | **0,00176 USD** |
+| tokens de entrada por turno | 3.700 | 1.468 |
+| mensajes que nunca llegan al modelo | 76% | **88%** |
+| mil turnos por mes | 4,32 USD | **1,76 USD** |
+| chequeo de salud | 0,88 a 17,54 USD/mes | centavos |
+
+Tres cosas, en orden de sorpresa:
+
+**a) `/salud` llamaba al modelo en cada ping.** Lo pinchan el cron de GitHub cada
+10 minutos y Render como `healthCheckPath`, con su propia cadencia. Cada ping
+costaba 0,000203 USD, y 39 de esos 47 tokens eran el modelo contestando *"Hello!
+It seems like you've sent just a period…"* a un `"."` — una respuesta que
+`_llm_responde` tira, porque sólo mira si hubo excepción. Con volumen bajo el
+chequeo costaba **más que atender gente**. Ahora: `max_tokens=1` y caché de 5
+minutos, con `?profundo=1` para forzarlo.
+
+**b) El esquema de salida era el 70% de cada llamada.** 1.391 de 1.998 tokens.
+Lo inflaban los docstrings de las clases —Pydantic los serializa como
+`description`, y el más caro era justo el párrafo que explicaba por qué no hay
+que pagar descripciones— y los `anyOf: [string, null]` con `$defs` de
+`str | None`. Ahora se manda un esquema plano escrito a mano (`ESQUEMA`) y se
+valida a la vuelta con `Clasificacion.model_validate`: **724 tokens**.
+
+**c) El paso del nombre no tenía atajo.** Todo cliente nuevo pagaba una llamada
+para sacar "Ana" de "soy Ana", y en la conversación más común —la que toca sólo
+números— era la única llamada que quedaba. Con `nombre_propio()` esa
+conversación pasó a costar **0,00 USD**. Se rinde ante cualquier duda: un turno
+a nombre de «No Gracias» cuesta más que la llamada que ahorra.
+
+**Lo que NO se hizo, a propósito:** prompt caching. Es el descuento más grande
+del catálogo, pero el prefijo estable quedó en ~1.100 tokens contra un mínimo
+cacheable de 1.024, escribir la caché cuesta 1,25× —y la conversación más común
+ahora tiene CERO llamadas, así que no habría nada que reusar— y `cache_control`
+choca con el respaldo de Gemini. Está analizado en el plan; la decisión se toma
+con números nuevos si el volumen crece.
+
+**Ojo:** el README dice "Costo por turno reservado US$ 0,035" en la tabla de
+observabilidad. Ese número es de otra medición y quedó viejo por partida doble.
+
+---
+
 ## 🟢 5 · Encontrado de paso
 
 Ninguno lo causaron los cambios de arriba: los verifiqué contra el árbol limpio.
