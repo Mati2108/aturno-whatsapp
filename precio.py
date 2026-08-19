@@ -7,25 +7,40 @@ Para poder sentarse frente a un negocio, preguntarle cuántos turnos saca por
 mes, y saber en el momento si el precio del plan cubre el costo y con cuánto
 margen. Sin eso, vender es adivinar en qué punto se empieza a perder plata.
 
-    python precio.py 400            # 400 turnos por mes, con Twilio
-    python precio.py 400 --meta     # lo mismo con la API de Meta
-    python precio.py 400 --dolar 1450
+    python precio.py 400                      # el mundo desde octubre
+    python precio.py 400 --canal meta-oct     # Meta directo, desde octubre
+    python precio.py 400 --negocios 20 --margen 5 --dolar 1450
 
 LO QUE HAY QUE ENTENDER ANTES DE MIRAR NINGÚN NÚMERO
 ----------------------------------------------------
 **El modelo no es el costo. La entrega sí.**
 
 Un turno reservado gasta menos de dos milésimas de dólar de Claude. Los mismos
-mensajes, entregados por Twilio, cuestan veinte a cuarenta veces eso. Optimizar
+mensajes, entregados, cuestan entre cincuenta y cien veces eso. Optimizar
 prompts al lado de eso es acomodar las sillas: lo que mueve el margen es por
 dónde salen los mensajes.
 
-Y ahí está la decisión más importante del producto, que es de plomería y no de
-IA: con la API de Meta, los **mensajes de servicio** —los que responden dentro
-de la ventana de 24 horas que abre el cliente cuando escribe— **no se cobran**.
-Este bot no manda otra cosa: cada mensaje suyo contesta a alguien que escribió
-primero. Migrar a Meta no es una mejora técnica, es lo que vuelve el costo
-variable casi cero.
+LA FECHA QUE MANDA: 1 DE OCTUBRE DE 2026
+----------------------------------------
+Desde noviembre de 2024, Meta no cobra los **mensajes de servicio** —las
+respuestas dentro de la ventana de 24 h que abre el cliente cuando escribe—, y
+este bot no manda otra cosa: cada mensaje suyo contesta a alguien que escribió
+primero. Eso hacía que por Meta la entrega saliera CERO.
+
+**El 1 de octubre de 2026 Meta vuelve a cobrarlos**, a la misma tarifa que las
+plantillas de utility de cada país. Las tarifas finales las publica el 1 de
+septiembre.
+
+O sea que "migrar a Meta y la entrega es gratis" tiene fecha de vencimiento.
+Migrar sigue conviniendo —Meta cobra sólo los mensajes del negocio y Twilio
+cobra los dos, más su recargo, así que Meta directo termina costando la mitad—
+pero deja de ser gratis y el precio de venta tiene que cubrirlo.
+
+MEDIDO VS SUPUESTO
+------------------
+Lo que sale de correr el código está marcado MEDIDO y se puede rehacer. Lo que
+sale de una lista de precios de un tercero está marcado SUPUESTO y hay que
+confirmarlo antes de cerrar un trato: las tarifas cambian y no las controlamos.
 
 MEDIDO VS SUPUESTO
 ------------------
@@ -63,9 +78,29 @@ MENSAJES_DEL_BOT = 8.5
 # país y por volumen contratado.
 TWILIO_POR_MENSAJE = 0.005
 
-# Con Meta directo, los mensajes de servicio dentro de la ventana de 24 h no se
-# cobran. Cero y no "casi cero": es la categoría entera lo que es gratis.
+# Con Meta directo, HASTA EL 30 DE SEPTIEMBRE DE 2026, los mensajes de servicio
+# dentro de la ventana de 24 h no se cobran. Cero y no "casi cero": es la
+# categoría entera lo que es gratis.
 META_POR_MENSAJE = 0.0
+
+# EL 1 DE OCTUBRE DE 2026 ESO SE TERMINA.
+#
+# Meta vuelve a cobrar los mensajes de servicio —las respuestas de texto libre
+# dentro de la ventana de 24 h—, que es exactamente lo único que manda este bot.
+# Fueron gratis desde noviembre de 2024 hasta septiembre de 2026, y esa ventana
+# se cierra. Las tarifas finales las publica Meta el 1 de septiembre.
+#
+# SUPUESTO: 0,0120 USD por mensaje para Argentina, que es la tarifa de utility
+# —a la que Meta dijo que va a igualar las de servicio—. CONFIRMAR EN
+# SEPTIEMBRE: de este número depende el precio de venta entero.
+#
+# Ojo con la asimetría: Meta cobra los mensajes del NEGOCIO, no los de la
+# persona. Twilio cobra los dos. Por eso no se multiplican por lo mismo.
+META_DESDE_OCTUBRE = 0.0120
+
+# Lo que Twilio suma ARRIBA de la tarifa de Meta, por su cuenta y por mensaje en
+# los dos sentidos. Después de octubre se pagan las dos cosas.
+TWILIO_RECARGO = 0.005
 
 # SUPUESTO: Render Starter para el bot más su Postgres. El plan gratuito NO
 # sirve en producción —duerme a los 15 minutos y el primer mensaje después se
@@ -88,14 +123,28 @@ SALTO_PERSONAL = 10_000
 SALTO_BUSINESS = 15_000
 
 
-def costos(turnos: int, por_mensaje: float, negocios: int) -> dict:
+# Los cuatro escenarios de entrega, y cuánto cobra cada uno por qué.
+#
+# `del_bot` se cobra por cada mensaje que manda el bot; `de_ambos`, por cada
+# mensaje en cualquier dirección. La distinción no es cosmética: Meta cobra sólo
+# los del negocio y Twilio cobra los dos, así que mezclarlos da casi el doble.
+CANALES = {
+    "twilio": ("Twilio (hoy)", 0.0, TWILIO_RECARGO),
+    "meta": ("Meta directo (hasta el 30/9/2026)", META_POR_MENSAJE, 0.0),
+    "meta-oct": ("Meta directo (desde el 1/10/2026)", META_DESDE_OCTUBRE, 0.0),
+    "twilio-oct": ("Twilio (desde el 1/10/2026)", META_DESDE_OCTUBRE, TWILIO_RECARGO),
+}
+
+
+def costos(turnos: int, del_bot: float, de_ambos: float, negocios: int) -> dict:
     """El desglose mensual para un negocio con ese volumen."""
-    mensajes = turnos * (MENSAJES_DE_LA_PERSONA + MENSAJES_DEL_BOT)
+    salientes = turnos * MENSAJES_DEL_BOT
+    todos = turnos * (MENSAJES_DE_LA_PERSONA + MENSAJES_DEL_BOT)
     modelo = turnos * MODELO_POR_TURNO
-    entrega = mensajes * por_mensaje
+    entrega = salientes * del_bot + todos * de_ambos
     hosting = HOSTING_MENSUAL / max(1, negocios)
     return {
-        "mensajes": mensajes,
+        "mensajes": todos,
         "modelo": modelo,
         "entrega": entrega,
         "embeddings": EMBEDDINGS,
@@ -108,83 +157,68 @@ def costos(turnos: int, por_mensaje: float, negocios: int) -> dict:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("turnos", type=int, help="turnos por mes que saca el negocio")
-    p.add_argument("--meta", action="store_true",
-                   help="con la API de Meta (mensajes de servicio gratis)")
-    p.add_argument("--dolar", type=float, default=1450.0,
-                   help="pesos por dólar, para comparar con el precio del plan")
+    p.add_argument("--canal", choices=list(CANALES), default="twilio-oct",
+                   help="por dónde salen los mensajes (default: el mundo desde octubre)")
+    p.add_argument("--dolar", type=float, default=1450.0, help="pesos por dólar")
     p.add_argument("--negocios", type=int, default=1,
                    help="entre cuántos negocios se reparte el hosting")
-    p.add_argument("--business", action="store_true",
-                   help="comparar contra el salto de plan business, no personal")
+    p.add_argument("--margen", type=float, default=4.0,
+                   help="cuántas veces el costo querés cobrar (default 4)")
     a = p.parse_args()
 
-    por_mensaje = META_POR_MENSAJE if a.meta else TWILIO_POR_MENSAJE
-    canal = "Meta (API oficial)" if a.meta else "Twilio"
-    c = costos(a.turnos, por_mensaje, a.negocios)
-    salto = SALTO_BUSINESS if a.business else SALTO_PERSONAL
-    salto_usd = salto / a.dolar
+    etiqueta, del_bot, de_ambos = CANALES[a.canal]
+    c = costos(a.turnos, del_bot, de_ambos, a.negocios)
+    por_turno = c["total"] / max(1, a.turnos)
+    variable = c["variable"] / max(1, a.turnos)
 
-    print(f"\n{'═' * 68}")
-    print(f"{NEGRITA}  UN NEGOCIO CON {a.turnos} TURNOS POR MES · canal: {canal}{FIN}")
-    print("═" * 68)
+    print(f"\n{'=' * 70}")
+    print(f"{NEGRITA}  {a.turnos} TURNOS/MES  ·  {etiqueta}{FIN}")
+    print("=" * 70)
 
-    print(f"\n  {'COSTO MENSUAL':<34} {'USD':>10}   {'por turno':>10}")
-    print(f"  {'-' * 34} {'-' * 10}   {'-' * 10}")
-    filas = [
+    print(f"\n  {'TE CUESTA POR MES':<36} {'USD':>9}   {'por turno':>10}")
+    print(f"  {'-' * 36} {'-' * 9}   {'-' * 10}")
+    for nombre, valor, nota in [
         ("Modelo (Claude Haiku)", c["modelo"], "MEDIDO"),
-        (f"Entrega · {c['mensajes']:,.0f} mensajes", c["entrega"],
-         "MEDIDO" if a.meta else "SUPUESTO"),
-        ("Embeddings (RAG)", c["embeddings"], "entra en el plan gratis"),
+        (f"Entrega · {c['mensajes']:,.0f} mensajes", c["entrega"], "SUPUESTO"),
+        ("Embeddings (RAG)", c["embeddings"], "plan gratis"),
         (f"Hosting ÷ {a.negocios} negocio(s)", c["hosting"], "SUPUESTO"),
-    ]
-    for nombre, valor, nota in filas:
-        por_turno = valor / a.turnos if a.turnos else 0
-        print(f"  {nombre:<34} {valor:>10.2f}   {por_turno:>10.5f}   {GRIS}{nota}{FIN}")
+    ]:
+        print(f"  {nombre:<36} {valor:>9.2f}   {valor / max(1, a.turnos):>10.5f}"
+              f"   {GRIS}{nota}{FIN}")
+    print(f"  {'-' * 36} {'-' * 9}   {'-' * 10}")
+    print(f"  {NEGRITA}{'COSTO':<36} {c['total']:>9.2f}   {por_turno:>10.5f}{FIN}")
 
-    print(f"  {'-' * 34} {'-' * 10}   {'-' * 10}")
-    print(f"  {NEGRITA}{'TOTAL':<34} {c['total']:>10.2f}   "
-          f"{c['total'] / max(1, a.turnos):>10.5f}{FIN}")
+    if c["total"]:
+        pct = c["entrega"] / c["total"] * 100
+        print(f"\n  {GRIS}La entrega es el {pct:.0f}% del costo. "
+              f"El modelo, el {c['modelo'] / c['total'] * 100:.0f}%.{FIN}")
 
-    # ---- Contra qué se compara ----
-    print(f"\n  {NEGRITA}CONTRA EL PRECIO{FIN}")
-    print(f"  El plan con bot cuesta {salto:,} pesos más por mes")
-    print(f"  = US$ {salto_usd:.2f} al dólar {a.dolar:,.0f}")
+    # ---- El número que se le pasa al negocio ----
+    precio = c["total"] * a.margen
+    print(f"\n  {NEGRITA}LE COBRÁS (a {a.margen:g}× el costo){FIN}")
+    print(f"    {VERDE}{NEGRITA}US$ {precio:>8.2f} / mes   =   "
+          f"$ {precio * a.dolar:>11,.0f} pesos{FIN}")
+    print(f"    {GRIS}ganás US$ {precio - c['total']:.2f} por mes con este negocio{FIN}")
 
-    margen = salto_usd - c["total"]
-    veces = salto_usd / c["total"] if c["total"] else 0
-    color = VERDE if margen > 0 else ROJO
-    print(f"\n  {color}{NEGRITA}margen: US$ {margen:.2f} por mes "
-          f"({veces:.0f}× el costo){FIN}")
-
-    # ---- Hasta dónde aguanta ----
+    # ---- Para armar tramos ----
     #
-    # El número que falta en COMO-SE-OFRECE.md: "el plan debería decir hasta
-    # cuántos turnos incluye". Con un costo variable por turno y un ingreso
-    # fijo, el punto donde se empatan es una división.
-    variable_por_turno = c["variable"] / a.turnos if a.turnos else 0
-    if variable_por_turno > 0:
-        techo = (salto_usd - c["hosting"]) / variable_por_turno
-        print(f"\n  {NEGRITA}A ESTE PRECIO, EL PLAN CIERRA HASTA "
-              f"{techo:,.0f} TURNOS/MES{FIN}")
-        if techo < a.turnos:
-            print(f"  {ROJO}  ⚠ Este negocio está POR ENCIMA: perdés plata.{FIN}")
-        elif techo < a.turnos * 2:
-            print(f"  {AMARILLO}  ⚠ Este negocio está cerca del techo. "
-                  f"Si crece, revisá el precio.{FIN}")
-        else:
-            print(f"  {GRIS}  Este negocio usa el "
-                  f"{a.turnos / techo * 100:.0f}% de lo que el plan aguanta.{FIN}")
+    # Con precio variable por cliente, lo que hace falta no es UN número sino
+    # saber cuánto sube el costo por cada turno de más: es lo que permite decir
+    # "hasta 300 incluidos, el excedente a tanto" sin perder plata.
+    print(f"\n  {NEGRITA}PARA ARMAR TRAMOS{FIN}")
+    print(f"    cada turno de más te cuesta  US$ {variable:.5f}"
+          f"   = $ {variable * a.dolar:,.2f} pesos")
+    print(f"    cobrándolo a {a.margen:g}×          US$ {variable * a.margen:.5f}"
+          f"   = $ {variable * a.margen * a.dolar:,.2f} pesos por turno")
 
-    if not a.meta:
-        con_meta = costos(a.turnos, META_POR_MENSAJE, a.negocios)
-        print(f"\n  {GRIS}Con la API de Meta el mismo negocio costaría "
-              f"US$ {con_meta['total']:.2f} en vez de {c['total']:.2f} "
-              f"({c['total'] / con_meta['total']:.0f}× menos).{FIN}")
-        print(f"  {GRIS}La entrega es el {c['entrega'] / c['total'] * 100:.0f}% "
-              f"del costo. El modelo, el "
-              f"{c['modelo'] / c['total'] * 100:.0f}%.{FIN}")
+    print(f"\n  {NEGRITA}EL MISMO NEGOCIO POR CADA CANAL{FIN}")
+    for clave, (nom, db, da) in CANALES.items():
+        o = costos(a.turnos, db, da, a.negocios)
+        marca = "◀" if clave == a.canal else " "
+        print(f"    {marca} {nom:<38} US$ {o['total']:>7.2f}/mes"
+              f"   {o['total'] / max(1, a.turnos):>8.5f}/turno")
 
-    print(f"\n{'═' * 68}\n")
+    print(f"\n{'=' * 70}\n")
     return 0
 
 
