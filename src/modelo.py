@@ -45,12 +45,22 @@ def hay_credencial(proveedor: str) -> bool:
     }.get(proveedor, False)
 
 
-def construir_modelo(proveedor: str | None = None) -> BaseChatModel:
+def construir_modelo(proveedor: str | None = None,
+                     max_tokens: int | None = None) -> BaseChatModel:
     """Devuelve el chat model del proveedor pedido, con tool calling.
 
     Sin argumento usa el de la config, que es el caso normal. El parámetro
     existe para poder armar la cadena de respaldo con otro proveedor, sin tocar
     la variable de entorno ni ningún estado global.
+
+    `max_tokens` acota la respuesta. Cada proveedor le pone otro nombre a lo
+    mismo —`num_predict`, `max_tokens`, `max_output_tokens`— y traducirlo es
+    justamente el trabajo de este módulo: quien llama pide "no más de N tokens"
+    y no tiene que saber con quién está hablando.
+
+    Lo usa el chequeo de salud, que sólo necesita saber si el proveedor
+    CONTESTA. Sin acotarlo, el modelo respondía un párrafo entero a un punto y
+    esa respuesta —que nadie lee— era el 83% de lo que costaba el chequeo.
     """
     cfg = config()
     proveedor = proveedor or cfg.provider
@@ -61,7 +71,8 @@ def construir_modelo(proveedor: str | None = None) -> BaseChatModel:
         # Local: gratis e ilimitado, ideal para iterar. El tool calling de un
         # modelo chico es más flojo que el de un modelo grande — por eso el
         # sistema es conmutable y el demo final sale por Claude.
-        return ChatOllama(model=cfg.ollama_modelo, temperature=TEMPERATURA)
+        return ChatOllama(model=cfg.ollama_modelo, temperature=TEMPERATURA,
+                          **({"num_predict": max_tokens} if max_tokens else {}))
 
     if proveedor == "anthropic":
         from langchain_anthropic import ChatAnthropic
@@ -69,7 +80,7 @@ def construir_modelo(proveedor: str | None = None) -> BaseChatModel:
         return ChatAnthropic(
             model=cfg.anthropic_modelo,
             temperature=TEMPERATURA,
-            max_tokens=1024,
+            max_tokens=max_tokens or 1024,
             api_key=_key("ANTHROPIC_API_KEY", cfg.anthropic_api_key),
         )
 
@@ -80,6 +91,7 @@ def construir_modelo(proveedor: str | None = None) -> BaseChatModel:
             model=cfg.openai_modelo,
             temperature=TEMPERATURA,
             api_key=_key("OPENAI_API_KEY", cfg.openai_api_key),
+            **({"max_tokens": max_tokens} if max_tokens else {}),
         )
 
     if proveedor == "gemini":
@@ -89,6 +101,7 @@ def construir_modelo(proveedor: str | None = None) -> BaseChatModel:
             model=cfg.gemini_modelo,
             temperature=TEMPERATURA,
             google_api_key=_key("GEMINI_API_KEY", cfg.gemini_api_key),
+            **({"max_output_tokens": max_tokens} if max_tokens else {}),
         )
 
     raise ValueError(

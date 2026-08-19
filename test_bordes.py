@@ -371,6 +371,51 @@ async def t12_el_aviso_del_pago():
     chequear("y ofrece volver a intentar", "escribime" in vencida)
 
 
+async def t14_el_chequeo_de_salud_no_se_paga_dos_veces():
+    print(f"\n{NEGRITA}[14] /salud NO PAGA UNA LLAMADA POR PING{FIN}")
+    print(f"{GRIS}  Lo pinchan dos automatismos; cada ping costaba una llamada al modelo.{FIN}")
+
+    from src.api import webhook as W
+
+    llamadas = []
+
+    class ModeloFalso:
+        async def ainvoke(self, _texto):
+            return "ok"
+
+    def construir(nombre, max_tokens=None):
+        llamadas.append((nombre, max_tokens))
+        return ModeloFalso()
+
+    original, W._salud_llm = W.construir_modelo, None
+    W.construir_modelo = construir
+    try:
+        for _ in range(5):
+            piensa, quien, _ = await W._llm_responde()
+
+        chequear("cinco pings, una sola llamada al modelo",
+                 len(llamadas) == 1, f"{len(llamadas)} llamadas")
+        chequear("y la respuesta sigue siendo la correcta", piensa and quien)
+
+        # El tope es lo que evita pagar un párrafo que nadie lee.
+        chequear("se le pide un solo token de respuesta",
+                 llamadas[0][1] == 1, f"max_tokens={llamadas[0][1]}")
+
+        # Pero quien necesita el dato fresco lo puede pedir.
+        await W._llm_responde(forzar=True)
+        chequear("con ?profundo=1 sí vuelve a preguntar",
+                 len(llamadas) == 2, f"{len(llamadas)} llamadas")
+
+        # Y pasado el rato se vuelve a chequear solo: una cuenta sin crédito
+        # tiene que poder detectarse sin que nadie fuerce nada.
+        W._salud_llm = (W._monotonic() - W.CACHE_SALUD_SEGUNDOS - 1, (True, "x", ""))
+        await W._llm_responde()
+        chequear("vencida la caché, vuelve a preguntar sola",
+                 len(llamadas) == 3, f"{len(llamadas)} llamadas")
+    finally:
+        W.construir_modelo, W._salud_llm = original, None
+
+
 async def t13_failover_del_modelo():
     print(f"\n{NEGRITA}[13] SI EL PROVEEDOR SE CAE, CONTESTA EL RESPALDO{FIN}")
     print(f"{GRIS}  Pasó: se acabó el crédito y ningún cliente nuevo pudo sacar turno.{FIN}")
@@ -490,6 +535,7 @@ async def main():
     await t11_sin_link_no_hay_turno(g, doble)
     await t12_el_aviso_del_pago()
     await t13_failover_del_modelo()
+    await t14_el_chequeo_de_salud_no_se_paga_dos_veces()
 
     print(f"\n{'─' * 58}")
     print(f"{VERDE}Todo en verde.{FIN}" if ok else f"{ROJO}Hay bordes rotos.{FIN}")

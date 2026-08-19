@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import logging
+from time import monotonic as _monotonic
 
 import httpx
 from datetime import datetime, timedelta, timezone
@@ -665,7 +666,28 @@ def _hay_indice() -> bool:
         return False
 
 
-async def _llm_responde() -> tuple[bool, str, str]:
+# Cuánto vale una respuesta del chequeo antes de volver a preguntar.
+#
+# POR QUÉ HAY CACHÉ
+# `/salud` no lo consulta una persona: lo pinchan dos automatismos. El cron de
+# GitHub cada 10 minutos, para que Render no duerma el contenedor, y el propio
+# Render, que lo tiene como `healthCheckPath` y usa la cadencia que quiere. Cada
+# uno de esos pings pagaba una llamada al modelo.
+#
+# Medido: 0,000203 USD por llamada. Cada 10 minutos son 0,88 USD por mes; si
+# Render pincha cada 30 segundos, 17,54. Contra eso, mil turnos reservados
+# cuestan 4,32. O sea que el chequeo podía costar más que atender gente.
+#
+# Cinco minutos porque lo que esto detecta —una cuenta sin crédito, una clave
+# revocada— no cambia en segundos, y quien necesite el dato fresco tiene
+# `?profundo=1`. Con esto, el techo son 8.640 llamadas al mes hagan lo que hagan
+# los que pinchan.
+CACHE_SALUD_SEGUNDOS = 300
+
+_salud_llm: tuple[float, tuple[bool, str, str]] | None = None
+
+
+async def _llm_responde(forzar: bool = False) -> tuple[bool, str, str]:
     """¿El LLM contesta? Una llamada mínima, de un token.
 
     Existe porque /salud decía "ok" con el modelo caído. El servicio estaba
@@ -690,12 +712,29 @@ async def _llm_responde() -> tuple[bool, str, str]:
     Devuelve QUIÉN contestó, porque no es lo mismo estar en pie que estar en
     pie por el respaldo: lo segundo funciona pero hay que ir a arreglarlo.
     """
+    global _salud_llm
+
+    if not forzar and _salud_llm is not None:
+        cuando, respuesta = _salud_llm
+        if _monotonic() - cuando < CACHE_SALUD_SEGUNDOS:
+            return respuesta
+
+    def recordar(r: tuple[bool, str, str]) -> tuple[bool, str, str]:
+        global _salud_llm
+        _salud_llm = (_monotonic(), r)
+        return r
+
     for nombre in [config().provider, *config().respaldos()]:
         if not hay_credencial(nombre):
             continue
         try:
-            await construir_modelo(nombre).ainvoke(".")
-            return True, nombre, ""
+            # `max_tokens=1`: lo único que se mira es si CONTESTA. Sin el tope,
+            # el modelo respondía un párrafo entero al punto —"Hello! It seems
+            # like you've sent just a period…"— y esa respuesta que nadie lee
+            # era 39 de los 47 tokens del chequeo, o sea el 83% de lo que
+            # costaba. Medido: 0,000203 USD por llamada contra 0,000013.
+            await construir_modelo(nombre, max_tokens=1).ainvoke(".")
+            return recordar((True, nombre, ""))
         except Exception as e:  # noqa: BLE001
             texto = str(e)
             if "credit balance" in texto or "billing" in texto.lower():
@@ -708,14 +747,19 @@ async def _llm_responde() -> tuple[bool, str, str]:
                 detalle = texto[:80]
             logger.warning("el proveedor %s no contesta: %s", nombre, detalle)
             ultimo = f"{nombre}: {detalle}"
-    return False, "", locals().get("ultimo", "no hay ningún proveedor con credencial")
+    return recordar(
+        (False, "", locals().get("ultimo", "no hay ningún proveedor con credencial")))
 
 
 @app.get("/salud", response_model=Salud)
-async def salud() -> Salud:
-    """Chequeo rápido: ¿está vivo, y además puede hacer su trabajo?"""
+async def salud(profundo: bool = False) -> Salud:
+    """Chequeo rápido: ¿está vivo, y además puede hacer su trabajo?
+
+    `?profundo=1` fuerza preguntarle al modelo aunque haya respuesta reciente.
+    Sin eso, la respuesta puede venir de la caché de `_llm_responde`.
+    """
     cfg = config()
-    piensa, quien, detalle = await _llm_responde()
+    piensa, quien, detalle = await _llm_responde(forzar=profundo)
     por_respaldo = piensa and quien != cfg.provider
     return Salud(
         # "degradado" también cuando contesta el respaldo: el bot atiende, pero
