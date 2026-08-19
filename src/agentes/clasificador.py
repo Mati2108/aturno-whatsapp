@@ -37,11 +37,13 @@ logger = logging.getLogger("pipeline.clasificador")
 class Entidades(BaseModel):
     """Los datos que el mensaje pueda traer. Todos opcionales.
 
-    Sin `description` en los campos a propósito. El esquema de esta clase viaja
-    ENTERO en cada llamada —medido: 1.205 de los 1.677 tokens de entrada, el
-    72%— y cada descripción se paga en todas. Lo que decían está en
-    INSTRUCCIONES, que se manda igual: describirlo dos veces es pagarlo dos
-    veces. Los nombres de los campos alcanzan para que el modelo sepa qué poner.
+    Estas clases ya NO son lo que viaja: lo que se le manda al modelo es
+    `ESQUEMA`, más abajo. Acá sólo se valida lo que vuelve, así que este
+    docstring es gratis. No siempre lo fue —ver el comentario de `ESQUEMA`—.
+
+    Sin `description` en los campos igual, y a propósito: lo que dirían está en
+    INSTRUCCIONES, que se manda de todas formas. Describirlo dos veces sería
+    pagarlo dos veces, y los nombres de los campos alcanzan.
     """
 
     servicio: str | None = None
@@ -64,6 +66,61 @@ class Clasificacion(BaseModel):
     entities: Entidades = Field(default_factory=Entidades)
 
 
+# Los campos de `Entidades`, en el orden en que se declararon. Se derivan del
+# modelo y no se escriben a mano: agregar un campo allá tiene que alcanzar.
+CAMPOS = tuple(Entidades.model_fields)
+
+
+# LO QUE SE LE MANDA AL MODELO. No es el esquema de Pydantic, y esa es la
+# diferencia entre pagar 1.391 tokens por llamada y pagar 694.
+#
+# `with_structured_output(Clasificacion)` manda `model_json_schema()`, y ese
+# esquema viaja ENTERO en cada llamada aunque la persona haya escrito "dale".
+# Medido con `count_tokens` sobre claude-haiku-4-5, era el 70% de los 1.998
+# tokens de entrada de cada clasificación. Dos cosas lo inflaban:
+#
+#   · Los docstrings de las clases. Pydantic los serializa como `description`.
+#     El más caro era el de `Entidades` — el párrafo que explicaba por qué no
+#     hay que pagar descripciones—: 460 tokens en cada mensaje de cada
+#     conversación.
+#   · `str | None = None`. Genera `anyOf: [{"type":"string"},{"type":"null"}]`
+#     más un `title`, seis veces, más `$defs` con `$ref` para las clases
+#     anidadas. Otros 237.
+#
+# Escrito a mano queda plano: un tipo por campo y el enum al lado. Las
+# entidades suben al nivel de arriba porque anidarlas obliga a un `$def`, y un
+# `$def` cuesta más que los seis campos.
+#
+# EL CANDADO NO SE PIERDE. Antes lo daba `with_structured_output`; ahora lo da
+# `Clasificacion.model_validate` sobre lo que vuelve. Sigue siendo "llega
+# validado o falla" —y falla hacia el respaldo, y después hacia DESCONOCIDO—,
+# sólo que la validación es explícita y está tres líneas más abajo.
+ESQUEMA = {
+    "title": "clasificar",
+    "description": "Qué quiso decir la persona y qué datos trae.",
+    "type": "object",
+    "properties": {
+        "intent": {"type": "string", "enum": [i.value for i in Intencion]},
+        **{campo: {"type": "string"} for campo in CAMPOS},
+    },
+    "required": ["intent"],
+}
+
+
+def _a_clasificacion(bruto: dict) -> Clasificacion:
+    """Del dict plano que devuelve el modelo al objeto validado que usa el flujo.
+
+    Los vacíos se normalizan a `None`: con el esquema plano el modelo puede
+    mandar `""` donde antes mandaba `null`, y el flujo distingue "no lo dijo"
+    de "lo dijo vacío" en varios lados (`ent.get("consulta") or ...`).
+    """
+    bruto = bruto or {}
+    return Clasificacion(
+        intent=bruto.get("intent") or Intencion.DESCONOCIDO,
+        entities=Entidades(**{c: (bruto.get(c) or None) for c in CAMPOS}),
+    )
+
+
 INSTRUCCIONES = """\
 Clasificás mensajes de WhatsApp de un negocio de turnos. NO redactás respuestas.
 
@@ -75,6 +132,8 @@ Hoy es {hoy} ({dia_semana}).
 {calendario}
 
 Reglas de extracción:
+- Devolvé SOLO los campos que la persona dijo. Los que no dijo, omitilos.
+- `consulta` va únicamente con consultar_info: es qué está preguntando.
 - fecha en AAAA-MM-DD, hora en HH:MM de 24 horas.
 - La hora es EXACTAMENTE la que escribió la persona, aunque no esté en las
   opciones. Si escribe 10:37, devolvés 10:37, nunca 10:30. Redondear al
@@ -99,8 +158,12 @@ def construir_clasificador(proveedor: str | None = None):
     )
     # temperature=0 y salida estructurada: la misma frase clasifica igual
     # siempre. En un flujo de turnos, la variabilidad no aporta nada.
-    modelo = construir_modelo(proveedor).with_structured_output(Clasificacion)
-    return prompt | modelo
+    #
+    # El esquema va como dict y la validación al final: ver el comentario de
+    # `ESQUEMA`. `max_tokens=256` porque lo que vuelve es un objeto de siete
+    # campos cortos; el default de 1024 nunca se usaba.
+    modelo = construir_modelo(proveedor, max_tokens=256).with_structured_output(ESQUEMA)
+    return prompt | modelo | _a_clasificacion
 
 
 def construir_respaldos() -> list[tuple[str, object]]:
