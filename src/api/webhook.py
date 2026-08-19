@@ -54,7 +54,7 @@ from src.fechas import ahora, calendario
 from src import plantillas as P
 from src.observabilidad import configurar_trazas, trazado_activo
 from src.modelo import construir_modelo, hay_credencial
-from src.rag.indice import modelo_en_uso, reindexar_negocio
+from src.rag.indice import CARPETA_DATOS, modelo_en_uso, reindexar_negocio
 from src.schemas import MensajeEntrante, Tenant
 
 logger = logging.getLogger("pipeline.webhook")
@@ -136,11 +136,74 @@ async def _al_arrancar() -> None:
     await saver.setup()  # crea las tablas del checkpointer si faltan
     _grafo = construir_flujo(saver)
 
+    await _traer_el_conocimiento()
+
     logger.info(
         "aturno-whatsapp listo · LLM=%s · aturno=%s · firma=%s · negocios=%d · RAG=%s · trazas=%s",
         cfg.provider, cfg.aturno_modo, cfg.validar_firma, len(TENANTS),
         modelo_en_uso().split('/')[-1], "on" if trazado_activo() else "off",
     )
+
+
+async def _traer_el_conocimiento() -> None:
+    """Al arrancar, vuelve a leer de aturno lo que cada negocio cargó.
+
+    POR QUÉ HACE FALTA
+    El panel empuja: cuando el negocio guarda una respuesta, aturno llama a
+    `/panel/reindexar` y el bot la indexa. Eso funciona. El problema es dónde
+    queda: `reindexar_negocio` escribe en `datos/` y **en Render el disco es
+    efímero**. En el deploy siguiente, `arranque.sh` reconstruye el índice desde
+    los `.md` que viajan en la imagen —una foto vieja, del repo— y todo lo que
+    se cargó por el panel desaparece.
+
+    El síntoma es el peor de todos, porque no parece un error: el negocio cargó
+    cómo llegar, con qué colectivos y qué medios de pago acepta, lo probó, andaba
+    — y una semana después el bot contesta "ese dato no lo tengo cargado" sin que
+    nadie haya tocado nada.
+
+    Con esto, aturno es la única fuente de verdad —que es lo que el proyecto ya
+    dice en todos lados— y los `.md` del repo quedan como semilla de desarrollo.
+
+    FALLA BLANDO, COMO TODO EL RESTO DEL ÍNDICE
+    Si aturno no contesta, el bot arranca igual con lo que tenga: va a poder
+    sacar turnos, que es lo que el negocio vende, y a las preguntas va a
+    contestar que no tiene el dato. Es la misma regla que explica `arranque.sh`.
+    """
+    for negocio in TENANTS.values():
+        try:
+            markdown = await aturno.conocimiento(negocio.business_id)
+        except Exception:  # noqa: BLE001 — sin conocimiento se arranca igual
+            logger.warning("no se pudo traer el conocimiento de %s; sigo con lo que haya",
+                           negocio.business_id, exc_info=True)
+            continue
+
+        # Nada que traer: NO se borra lo que ya está. Un negocio que todavía no
+        # contestó el formulario no tiene por qué perder lo que trajo la imagen,
+        # y un `conocimiento()` vacío por un error del otro lado se ve igual.
+        if not (markdown or "").strip():
+            logger.info("%s no tiene conocimiento cargado en aturno", negocio.business_id)
+            continue
+
+        # Si es idéntico a lo que ya está en disco, no se recalculan embeddings.
+        # No es micro-optimización: el plan gratuito da 1.000 por día para TODO
+        # el proyecto, y reindexar en cada arranque se los come sin necesidad.
+        archivo = CARPETA_DATOS / f"{negocio.business_id}.md"
+        try:
+            igual = archivo.read_text(encoding="utf-8") == markdown
+        except OSError:
+            igual = False
+        if igual and _hay_indice():
+            logger.info("%s ya está indexado y sin cambios", negocio.business_id)
+            continue
+
+        try:
+            cuantos = await asyncio.to_thread(
+                reindexar_negocio, negocio.business_id, markdown)
+            logger.info("%s indexado desde aturno: %d fragmentos",
+                        negocio.business_id, cuantos)
+        except Exception:  # noqa: BLE001
+            logger.warning("no se pudo indexar el conocimiento de %s",
+                           negocio.business_id, exc_info=True)
 
 
 @app.on_event("shutdown")
