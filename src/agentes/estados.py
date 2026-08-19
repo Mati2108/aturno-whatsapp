@@ -312,6 +312,77 @@ def pedido_de_cambio(texto: str) -> Intencion | None:
     return None
 
 
+# Cómo se presenta la gente. El resto del mensaje es el nombre.
+_PRESENTACIONES = (
+    "mi nombre es", "me llamo", "me llamó", "soy el", "soy la", "yo soy",
+    "soy", "a nombre de", "es para", "para", "anotame como", "anotá",
+    "anota", "ponelo a nombre de", "ponelo como", "el nombre es",
+    "nombre", "de parte de",
+)
+
+# Palabras que descartan que el mensaje sea un nombre, aunque tenga la forma.
+#
+# Sin esto, "no gracias" o "el jueves" pasarían por nombres de dos palabras y
+# el turno quedaría a nombre de «No Gracias». El costo de equivocarse acá no es
+# una llamada al modelo: es un turno mal escrito en la agenda del negocio.
+_NO_ES_NOMBRE = frozenset({
+    "si", "no", "dale", "ok", "gracias", "hola", "buenas", "hoy", "mañana",
+    "manana", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado",
+    "domingo", "cualquiera", "igual", "cuanto", "cuando", "donde", "que",
+    "quien", "como", "porque", "turno", "corte", "hora", "horario", "dia",
+    "precio", "sale", "cuesta", "quiero", "necesito", "puedo", "tenes",
+    "tienen", "hay", "mas", "otro", "otra", "volver", "cancelar", "esperar",
+    "persona", "humano", "alguien", "bot", "link", "pagina", "web",
+})
+
+
+def nombre_propio(texto: str) -> str | None:
+    """El nombre que dijo la persona, o `None` si esto no parece un nombre.
+
+    POR QUÉ EXISTE
+    `ESPERANDO_NOMBRE` era el único paso del flujo sin ningún atajo, así que
+    TODO cliente nuevo pagaba una llamada al modelo para extraer "Ana" de
+    "soy Ana". En la conversación más común —la que toca sólo números— era la
+    única llamada que quedaba: resolverla acá la deja en cero.
+
+    CUÁNDO SE RINDE, QUE ES LO IMPORTANTE
+    Devuelve `None` ante cualquier duda y el mensaje sigue al clasificador, que
+    es el reparto que ya usan `respuesta_fija` y `opcion_por_nombre`. Un atajo
+    que adivina de más escribe mal el nombre en la agenda del negocio, y eso no
+    se arregla solo: la persona se presenta y el turno está a nombre de otro.
+
+    Por eso se exige que TODAS las palabras parezcan nombre. Basta una del
+    vocabulario del flujo para soltar el mensaje.
+    """
+    limpio = _normalizar(texto)
+    if not limpio:
+        return None
+
+    for presentacion in _PRESENTACIONES:
+        if limpio.startswith(presentacion + " "):
+            limpio = limpio[len(presentacion) + 1:].strip()
+            break
+
+    palabras = limpio.split()
+    # Tres es el techo: "Juan Carlos Pérez". Más que eso ya es una frase, y una
+    # frase con forma de nombre es justo lo que no hay que adivinar.
+    if not 1 <= len(palabras) <= 3:
+        return None
+    for palabra in palabras:
+        if len(palabra) < 2 or not palabra.isalpha() or palabra in _NO_ES_NOMBRE:
+            return None
+
+    # Se capitaliza sobre el texto ORIGINAL, no sobre el normalizado: `_normalizar`
+    # saca los acentos para poder comparar, y devolver "Matias" cuando la persona
+    # escribió "Matías" es escribirle mal el nombre en su propio turno.
+    crudo = texto.strip()
+    for presentacion in _PRESENTACIONES:
+        if _normalizar(crudo).startswith(presentacion + " "):
+            crudo = crudo.split(maxsplit=len(presentacion.split()))[-1]
+            break
+    return " ".join(p.capitalize() for p in crudo.split() if p)[:60] or None
+
+
 # Lo que dice alguien que ya pagó la seña y viene a avisarlo.
 #
 # Va como tabla y no como intención del modelo porque no necesita contexto: en

@@ -371,6 +371,54 @@ async def t12_el_aviso_del_pago():
     chequear("y ofrece volver a intentar", "escribime" in vencida)
 
 
+async def t15_el_nombre_no_gasta_modelo():
+    print(f"\n{NEGRITA}[15] EL NOMBRE SE RESUELVE SIN MODELO{FIN}")
+    print(f"{GRIS}  Era el único paso sin atajo: todo cliente nuevo pagaba una llamada.{FIN}")
+
+    from src.agentes.estados import nombre_propio
+
+    for texto, esperado in [
+        ("Ana", "Ana"),
+        ("matías calo", "Matías Calo"),
+        ("me llamo Juan Pérez", "Juan Pérez"),
+        ("soy Ana", "Ana"),
+        ("mi nombre es Sofía", "Sofía"),
+        ("a nombre de Carlos Gómez", "Carlos Gómez"),
+        ("JUAN CARLOS PEREZ", "Juan Carlos Perez"),
+    ]:
+        chequear(f"«{texto}» → {esperado}", nombre_propio(texto) == esperado,
+                 repr(nombre_propio(texto)))
+
+    # Y lo que importa más: cuándo NO adivina. Un turno a nombre de «No Gracias»
+    # no lo arregla nadie hasta que la persona se presenta en el local.
+    print(f"{GRIS}  Y donde tiene que rendirse y dejar pasar el mensaje al modelo:{FIN}")
+    for texto in ["no gracias", "el jueves", "dale", "cuanto sale", "hola",
+                  "quiero cambiar el horario", "mañana", "a las 3 de la tarde",
+                  "", "el 3", "cualquiera"]:
+        chequear(f"«{texto}» NO es un nombre", nombre_propio(texto) is None,
+                 repr(nombre_propio(texto)))
+
+    # De punta a punta: llegar al paso del nombre y contestarlo no llama al modelo.
+    doble = AturnoDoble()
+    F.configurar(doble)
+    g = F.construir_flujo(MemorySaver())
+    cfg = {"configurable": {
+        "thread_id": "t15", "business_id": NEG, "nombre_negocio": "Peluquería Demo",
+        "telefono": "+5491100000015", "nombre_cliente": None,
+        "calendario": calendario(dt.date.today(), 8)}}
+    for m in ["hola", "1", "3", "1", "1"]:
+        s = await g.ainvoke({"mensaje": m}, cfg)
+    assert s["estado"] == Estado.ESPERANDO_NOMBRE.value, f"no llegó al nombre: {s['estado']}"
+
+    s = await g.ainvoke({"mensaje": "soy Ana Pérez"}, cfg)
+    chequear("el flujo lo toma como nombre", s["intent"] == Intencion.DAR_NOMBRE.value,
+             f"intent={s['intent']}")
+    chequear("y avanza al resumen",
+             s["estado"] == Estado.ESPERANDO_CONFIRMACION.value, f"estado={s['estado']}")
+    chequear("con el nombre bien escrito", "Ana Pérez" in s["respuesta"],
+             s["respuesta"].splitlines()[0][:40])
+
+
 async def t14_el_chequeo_de_salud_no_se_paga_dos_veces():
     print(f"\n{NEGRITA}[14] /salud NO PAGA UNA LLAMADA POR PING{FIN}")
     print(f"{GRIS}  Lo pinchan dos automatismos; cada ping costaba una llamada al modelo.{FIN}")
@@ -536,6 +584,7 @@ async def main():
     await t12_el_aviso_del_pago()
     await t13_failover_del_modelo()
     await t14_el_chequeo_de_salud_no_se_paga_dos_veces()
+    await t15_el_nombre_no_gasta_modelo()
 
     print(f"\n{'─' * 58}")
     print(f"{VERDE}Todo en verde.{FIN}" if ok else f"{ROJO}Hay bordes rotos.{FIN}")

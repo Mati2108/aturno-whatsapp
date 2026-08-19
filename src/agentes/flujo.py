@@ -47,6 +47,7 @@ from src.agentes.estados import (
     anterior,
     afirmacion_sobre_lo_unico,
     dice_que_pago,
+    nombre_propio,
     numero_elegido,
     opcion_por_nombre,
     es_numero_suelto,
@@ -308,9 +309,22 @@ async def entender(conv: Conversacion, config) -> dict:
         logger.info("número suelto «%s» en el resumen: no lo interpreto", texto[:16])
         return {**limpio_turno, "intent": Intencion.DESCONOCIDO.value, "entidades": {}}
 
+    # El nombre, cuando parece un nombre. Era el único paso sin atajo, así que
+    # todo cliente nuevo pagaba una llamada para sacar "Ana" de "soy Ana" — y en
+    # la conversación más común, la que toca sólo números, era la ÚNICA llamada
+    # que quedaba. `nombre_propio` se rinde ante cualquier duda y el mensaje
+    # sigue al modelo: escribir mal un nombre en la agenda cuesta más que la
+    # llamada que ahorra.
+    if estado == Estado.ESPERANDO_NOMBRE:
+        nombre = nombre_propio(texto)
+        if nombre:
+            logger.info("«%s» → %s (nombre, sin LLM)", texto[:24], nombre)
+            return {**limpio_turno, "intent": Intencion.DAR_NOMBRE.value,
+                    "entidades": {"nombre": nombre}}
+
     # Las frases de siempre ("dale", "me da igual", "hablar con alguien") no
     # necesitan al modelo: significan lo mismo todas las veces. Cada una que se
-    # resuelve acá ahorra la llamada ENTERA, que son ~1.677 tokens de entrada
+    # resuelve acá ahorra la llamada ENTERA, que son ~1.300 tokens de entrada
     # aunque el mensaje sean tres letras.
     fija = respuesta_fija(texto, estado)
     if fija is not None:
