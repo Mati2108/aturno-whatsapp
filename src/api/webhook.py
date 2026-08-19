@@ -54,6 +54,7 @@ from src.config import TENANTS, config, tenant_por_numero
 from src.fechas import ahora, calendario
 from src import plantillas as P
 from src.observabilidad import configurar_trazas, trazado_activo
+from src.gasto import GASTO
 from src.modelo import construir_modelo, hay_credencial
 from src.rag.indice import CARPETA_DATOS, modelo_en_uso, reindexar_negocio
 from src.schemas import MensajeEntrante, Tenant
@@ -138,6 +139,12 @@ async def _al_arrancar() -> None:
     _grafo = construir_flujo(saver)
 
     await _traer_el_conocimiento()
+
+    # El primer chequeo del modelo, acá y no en el primer `/salud`. Cuesta una
+    # llamada por despliegue y a cambio la caché nunca está vacía: todo `/salud`
+    # posterior contesta al instante, sin que ninguno tenga que ser el que
+    # espera. Ver `CACHE_SALUD_SEGUNDOS`.
+    await _llm_responde(forzar=True)
 
     logger.info(
         "aturno-whatsapp listo · LLM=%s · aturno=%s · firma=%s · negocios=%d · RAG=%s · trazas=%s",
@@ -718,6 +725,16 @@ async def _llm_responde(forzar: bool = False) -> tuple[bool, str, str]:
         cuando, respuesta = _salud_llm
         if _monotonic() - cuando < CACHE_SALUD_SEGUNDOS:
             return respuesta
+        # Vencida: se devuelve lo último que se supo y se pregunta APARTE.
+        #
+        # Quien pide `/salud` casi siempre es Render, que corta a los 15
+        # segundos y reinicia la instancia si falla 60 seguidos. Bloquear ese
+        # request contra un tercero es acoplarle el liveness del servicio a que
+        # Anthropic conteste rápido: un mal minuto del proveedor pasaría a
+        # reiniciar el bot, que es peor que el problema que este chequeo
+        # detecta.
+        asyncio.create_task(_llm_responde(forzar=True))
+        return respuesta
 
     def recordar(r: tuple[bool, str, str]) -> tuple[bool, str, str]:
         global _salud_llm
@@ -733,7 +750,7 @@ async def _llm_responde(forzar: bool = False) -> tuple[bool, str, str]:
             # like you've sent just a period…"— y esa respuesta que nadie lee
             # era 39 de los 47 tokens del chequeo, o sea el 83% de lo que
             # costaba. Medido: 0,000203 USD por llamada contra 0,000013.
-            await construir_modelo(nombre, max_tokens=1).ainvoke(".")
+            await construir_modelo(nombre, max_tokens=1, motivo="salud").ainvoke(".")
             return recordar((True, nombre, ""))
         except Exception as e:  # noqa: BLE001
             texto = str(e)
@@ -749,6 +766,23 @@ async def _llm_responde(forzar: bool = False) -> tuple[bool, str, str]:
             ultimo = f"{nombre}: {detalle}"
     return recordar(
         (False, "", locals().get("ultimo", "no hay ningún proveedor con credencial")))
+
+
+@app.get("/gasto")
+async def gasto() -> dict:
+    """Cuánto se le pagó hoy al proveedor del modelo, y en qué se fue.
+
+    Existe porque un día aparecieron 5 dólares gastados sin volumen que los
+    explicara, y contestar de dónde salían costó leer el código y hacer cuentas
+    a mano. La causa —`/salud` llamando al modelo en cada uno de los chequeos
+    que Render manda cada 5 a 10 segundos— se veía enseguida con este desglose,
+    y sin él no se veía en ningún lado: Phoenix está apagado en producción.
+
+    Público a propósito, como `/salud` y `/configuracion`: no expone ninguna
+    credencial ni ningún dato de ninguna persona, y tener que autenticarse para
+    mirar cuánto se gasta es la clase de fricción que hace que nadie mire.
+    """
+    return GASTO.resumen()
 
 
 @app.get("/salud", response_model=Salud)

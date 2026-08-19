@@ -17,6 +17,7 @@ import logging
 from langchain_core.language_models import BaseChatModel
 
 from src.config import config
+from src.gasto import SIN_ETIQUETA, Contador
 
 logger = logging.getLogger("pipeline.modelo")
 
@@ -46,7 +47,8 @@ def hay_credencial(proveedor: str) -> bool:
 
 
 def construir_modelo(proveedor: str | None = None,
-                     max_tokens: int | None = None) -> BaseChatModel:
+                     max_tokens: int | None = None,
+                     motivo: str = SIN_ETIQUETA) -> BaseChatModel:
     """Devuelve el chat model del proveedor pedido, con tool calling.
 
     Sin argumento usa el de la config, que es el caso normal. El parámetro
@@ -61,9 +63,16 @@ def construir_modelo(proveedor: str | None = None,
     Lo usa el chequeo de salud, que sólo necesita saber si el proveedor
     CONTESTA. Sin acotarlo, el modelo respondía un párrafo entero a un punto y
     esa respuesta —que nadie lee— era el 83% de lo que costaba el chequeo.
+
+    `motivo` es para qué se llama, y es lo que hace legible el tablero de
+    `/gasto`: "clasificar" y "salud" cuestan cosas muy distintas y hasta ahora
+    se sumaban en un solo número sin nombre. Se engancha acá, en el constructor,
+    y no en cada llamada, porque este es el único lugar por el que pasan todos
+    los caminos al modelo: uno nuevo queda contado sin que nadie se acuerde.
     """
     cfg = config()
     proveedor = proveedor or cfg.provider
+    contador = [Contador(motivo)]
 
     if proveedor == "ollama":
         from langchain_ollama import ChatOllama
@@ -72,6 +81,7 @@ def construir_modelo(proveedor: str | None = None,
         # modelo chico es más flojo que el de un modelo grande — por eso el
         # sistema es conmutable y el demo final sale por Claude.
         return ChatOllama(model=cfg.ollama_modelo, temperature=TEMPERATURA,
+                          callbacks=contador,
                           **({"num_predict": max_tokens} if max_tokens else {}))
 
     if proveedor == "anthropic":
@@ -81,6 +91,7 @@ def construir_modelo(proveedor: str | None = None,
             model=cfg.anthropic_modelo,
             temperature=TEMPERATURA,
             max_tokens=max_tokens or 1024,
+            callbacks=contador,
             api_key=_key("ANTHROPIC_API_KEY", cfg.anthropic_api_key),
         )
 
@@ -90,6 +101,7 @@ def construir_modelo(proveedor: str | None = None,
         return ChatOpenAI(
             model=cfg.openai_modelo,
             temperature=TEMPERATURA,
+            callbacks=contador,
             api_key=_key("OPENAI_API_KEY", cfg.openai_api_key),
             **({"max_tokens": max_tokens} if max_tokens else {}),
         )
@@ -100,6 +112,7 @@ def construir_modelo(proveedor: str | None = None,
         return ChatGoogleGenerativeAI(
             model=cfg.gemini_modelo,
             temperature=TEMPERATURA,
+            callbacks=contador,
             google_api_key=_key("GEMINI_API_KEY", cfg.gemini_api_key),
             **({"max_output_tokens": max_tokens} if max_tokens else {}),
         )

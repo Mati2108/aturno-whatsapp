@@ -66,6 +66,30 @@ class Config(BaseSettings):
         pedidos = [p.strip() for p in self.provider_respaldo.split(",") if p.strip()]
         return [p for p in pedidos if p != self.provider]
 
+    # Cuánto se puede gastar por día en el modelo antes de dejar de llamarlo.
+    #
+    # POR QUÉ EXISTE
+    # Nada impedía que un bug, un bucle o un endpoint mal pensado se comieran el
+    # crédito entero en una noche. Pasó en chico y costó plata descubrirlo:
+    # `/salud` llamaba al modelo y Render lo pincha cada 5 a 10 segundos, o sea
+    # hasta 17.280 veces por día, corriendo aunque no escriba nadie.
+    #
+    # QUÉ PASA CUANDO SE TOCA, QUE ES LO IMPORTANTE
+    # El bot NO se cae: el clasificador devuelve DESCONOCIDO y el resto del flujo
+    # sigue igual. Hoy el 88% de los mensajes se resuelve sin modelo, así que
+    # quien contesta con números saca su turno lo mismo. Lo que se pierde es
+    # entender el texto libre.
+    #
+    # Degradar es la falla correcta acá. La alternativa —seguir gastando— ya se
+    # probó sola: cuando se acabó el crédito, el clasificador falló en TODOS los
+    # mensajes y ningún cliente nuevo pudo sacar turno, porque el paso del nombre
+    # dependía del modelo. Un bot que entiende menos atiende; uno sin crédito, no.
+    #
+    # Tres dólares es holgado a propósito: el gasto normal medido es de centavos
+    # por día. Este número no está para ahorrar, está para que una fuga tenga
+    # techo. En 0 se apaga el tope.
+    tope_diario_usd: float = 3.0
+
     # ---- Persistencia ----
     # El checkpointer de LangGraph. Postgres y no SQLite desde el arranque:
     # SQLite bloquea con escrituras concurrentes y no sirve con más de una

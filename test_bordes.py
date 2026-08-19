@@ -419,6 +419,51 @@ async def t15_el_nombre_no_gasta_modelo():
              s["respuesta"].splitlines()[0][:40])
 
 
+async def t16_el_techo_de_gasto_degrada_sin_romper():
+    print(f"\n{NEGRITA}[16] CON EL TECHO DE GASTO TOCADO, EL BOT SIGUE ATENDIENDO{FIN}")
+    print(f"{GRIS}  Quedarse sin crédito ya dejó a clientes nuevos sin poder sacar turno.{FIN}")
+
+    from src.agentes import clasificador as C
+    from src.gasto import GASTO, Linea
+
+    class NoDeberiaLlamarse:
+        def __init__(self): self.llamadas = 0
+        async def ainvoke(self, _datos):
+            self.llamadas += 1
+            raise AssertionError("se llamó al modelo con el techo tocado")
+
+    gastado = dict(GASTO.por_motivo)
+    try:
+        # Se simula un día caro: por encima del tope configurado.
+        GASTO.por_motivo = {"clasificar": Linea(llamadas=1, usd=999.0)}
+        chequear("el techo se detecta", C.tope_alcanzado())
+
+        cadena = NoDeberiaLlamarse()
+        r = await C.clasificar(cadena, "quiero un corte mañana",
+                               Estado.ESPERANDO_SERVICIO, None,
+                               "2026-08-19", "miércoles", "")
+        chequear("no se llama al modelo", cadena.llamadas == 0)
+        chequear("y cae en DESCONOCIDO, que el flujo sabe manejar",
+                 r.intent == Intencion.DESCONOCIDO, f"intent={r.intent.value}")
+
+        # Lo que importa de verdad: con el modelo apagado, alguien que contesta
+        # con números TIENE que poder sacar su turno igual.
+        doble = AturnoDoble()
+        F.configurar(doble)
+        g = F.construir_flujo(MemorySaver())
+        cfg = {"configurable": {
+            "thread_id": "t16", "business_id": NEG, "nombre_negocio": "Peluquería Demo",
+            "telefono": "+5491100000016", "nombre_cliente": None,
+            "calendario": calendario(dt.date.today(), 8)}}
+        for m in ["hola", "1", "3", "1", "1", "Ana Pérez", "sí"]:
+            s = await g.ainvoke({"mensaje": m}, cfg)
+        chequear("con el techo tocado igual se saca el turno",
+                 s["estado"] == Estado.CONFIRMADO.value, f"estado={s['estado']}")
+        chequear("y sale con su código", "Código:" in s["respuesta"])
+    finally:
+        GASTO.por_motivo = gastado
+
+
 async def t14_el_chequeo_de_salud_no_se_paga_dos_veces():
     print(f"\n{NEGRITA}[14] /salud NO PAGA UNA LLAMADA POR PING{FIN}")
     print(f"{GRIS}  Lo pinchan dos automatismos; cada ping costaba una llamada al modelo.{FIN}")
@@ -431,8 +476,8 @@ async def t14_el_chequeo_de_salud_no_se_paga_dos_veces():
         async def ainvoke(self, _texto):
             return "ok"
 
-    def construir(nombre, max_tokens=None):
-        llamadas.append((nombre, max_tokens))
+    def construir(nombre, max_tokens=None, motivo=None):
+        llamadas.append((nombre, max_tokens, motivo))
         return ModeloFalso()
 
     original, W._salud_llm = W.construir_modelo, None
@@ -448,18 +493,31 @@ async def t14_el_chequeo_de_salud_no_se_paga_dos_veces():
         # El tope es lo que evita pagar un párrafo que nadie lee.
         chequear("se le pide un solo token de respuesta",
                  llamadas[0][1] == 1, f"max_tokens={llamadas[0][1]}")
+        chequear("y queda etiquetado como «salud» en el tablero de gasto",
+                 llamadas[0][2] == "salud", f"motivo={llamadas[0][2]}")
 
         # Pero quien necesita el dato fresco lo puede pedir.
         await W._llm_responde(forzar=True)
         chequear("con ?profundo=1 sí vuelve a preguntar",
                  len(llamadas) == 2, f"{len(llamadas)} llamadas")
 
-        # Y pasado el rato se vuelve a chequear solo: una cuenta sin crédito
-        # tiene que poder detectarse sin que nadie fuerce nada.
-        W._salud_llm = (W._monotonic() - W.CACHE_SALUD_SEGUNDOS - 1, (True, "x", ""))
-        await W._llm_responde()
-        chequear("vencida la caché, vuelve a preguntar sola",
-                 len(llamadas) == 3, f"{len(llamadas)} llamadas")
+        # Vencida la caché, NO se bloquea: contesta con lo último que sabe y
+        # pregunta aparte. Render corta a los 15 segundos y reinicia la
+        # instancia si falla 60, así que su chequeo no puede quedar esperando a
+        # que Anthropic conteste.
+        W._salud_llm = (W._monotonic() - W.CACHE_SALUD_SEGUNDOS - 1,
+                        (True, "el-de-antes", ""))
+        antes = len(llamadas)
+        r = await W._llm_responde()
+        chequear("vencida la caché, contesta sin esperar al modelo",
+                 len(llamadas) == antes and r[1] == "el-de-antes",
+                 f"{len(llamadas) - antes} llamadas nuevas, quien={r[1]}")
+
+        # Pero sí se entera después: una cuenta sin crédito tiene que poder
+        # detectarse sin que nadie fuerce nada.
+        await asyncio.sleep(0)
+        chequear("y el refresco corre igual, por atrás",
+                 len(llamadas) == antes + 1, f"{len(llamadas) - antes} llamadas nuevas")
     finally:
         W.construir_modelo, W._salud_llm = original, None
 
@@ -585,6 +643,7 @@ async def main():
     await t13_failover_del_modelo()
     await t14_el_chequeo_de_salud_no_se_paga_dos_veces()
     await t15_el_nombre_no_gasta_modelo()
+    await t16_el_techo_de_gasto_degrada_sin_romper()
 
     print(f"\n{'─' * 58}")
     print(f"{VERDE}Todo en verde.{FIN}" if ok else f"{ROJO}Hay bordes rotos.{FIN}")

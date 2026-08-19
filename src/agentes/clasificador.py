@@ -12,11 +12,19 @@ de flujo y redacción, y eso ahora vive en código.
 
 DOS CANDADOS
 ------------
-1. `with_structured_output` con un modelo Pydantic: la respuesta ya llega
-   validada o falla. No hay parseo de JSON a mano ni JSON roto que se cuele.
+1. Salida estructurada más `Clasificacion.model_validate` a la vuelta: la
+   respuesta llega validada o falla. No hay parseo de JSON a mano ni JSON roto
+   que se cuele. (La validación es explícita y no de `with_structured_output`
+   porque el esquema que viaja se escribe a mano — ver `ESQUEMA`.)
 2. El enum de intenciones es cerrado. Una intención inventada no valida, y el
    fallback es DESCONOCIDO — que la máquina sabe manejar. El usuario nunca ve
    un error: ve la plantilla de reintento del paso en el que está.
+
+Y UN TECHO
+----------
+Pasado `TOPE_DIARIO_USD`, acá se deja de llamar al modelo y todo cae en
+DESCONOCIDO. El bot sigue atendiendo con los atajos —el 88% de los mensajes no
+pasa por acá— en vez de vaciar la cuenta. Ver `tope_alcanzado`.
 """
 
 from __future__ import annotations
@@ -29,6 +37,7 @@ from pydantic import BaseModel, Field
 
 from src.agentes.estados import Estado, Intencion
 from src.config import config
+from src.gasto import GASTO
 from src.modelo import construir_modelo, hay_credencial
 
 logger = logging.getLogger("pipeline.clasificador")
@@ -162,8 +171,8 @@ def construir_clasificador(proveedor: str | None = None):
     # El esquema va como dict y la validación al final: ver el comentario de
     # `ESQUEMA`. `max_tokens=256` porque lo que vuelve es un objeto de siete
     # campos cortos; el default de 1024 nunca se usaba.
-    modelo = construir_modelo(proveedor, max_tokens=256).with_structured_output(ESQUEMA)
-    return prompt | modelo | _a_clasificacion
+    modelo = construir_modelo(proveedor, max_tokens=256, motivo="clasificar")
+    return prompt | modelo.with_structured_output(ESQUEMA) | _a_clasificacion
 
 
 def construir_respaldos() -> list[tuple[str, object]]:
@@ -200,6 +209,12 @@ def construir_respaldos() -> list[tuple[str, object]]:
 # se termina, y quedarse en el respaldo para siempre sería la otra forma de
 # equivocarse.
 DESCANSO_TRAS_FALLA = 300  # segundos
+
+
+def tope_alcanzado() -> bool:
+    """¿Ya se gastó lo del día? Con el tope en 0, nunca."""
+    tope = config().tope_diario_usd
+    return tope > 0 and GASTO.usd_hoy() >= tope
 
 _principal_caido_hasta = 0.0
 
@@ -255,6 +270,20 @@ async def clasificar(
         "dia_semana": dia_semana,
         "calendario": calendario,
     }
+
+    # El techo del día. Antes de cualquier proveedor, porque el respaldo también
+    # se paga: un tope que sólo mira al principal se saltea solo.
+    #
+    # DESCONOCIDO y no una excepción: la máquina de estados ya sabe manejarlo
+    # —repite el pedido del paso— así que el bot sigue atendiendo con los
+    # atajos, que hoy resuelven el 88% de los mensajes. Ver `tope_diario_usd`.
+    if tope_alcanzado():
+        logger.error(
+            "TECHO DE GASTO ALCANZADO (%.2f USD hoy, tope %.2f): no llamo al "
+            "modelo. El bot sigue con los atajos; el texto libre cae en "
+            "DESCONOCIDO. Subí TOPE_DIARIO_USD o esperá al día siguiente.",
+            GASTO.usd_hoy(), config().tope_diario_usd)
+        return Clasificacion(intent=Intencion.DESCONOCIDO)
 
     # Al principal se le pregunta salvo que acabe de fallar. Ver el comentario
     # de DESCANSO_TRAS_FALLA: con el proveedor caído, insistir en cada mensaje
