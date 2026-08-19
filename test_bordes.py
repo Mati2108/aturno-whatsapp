@@ -419,6 +419,44 @@ async def t15_el_nombre_no_gasta_modelo():
              s["respuesta"].splitlines()[0][:40])
 
 
+async def t17_ningun_paso_termina_en_el_error_tecnico():
+    print(f"\n{NEGRITA}[17] NINGÚN PASO LE MUESTRA UN ERROR TÉCNICO A LA PERSONA{FIN}")
+    print(f"{GRIS}  «quiero otro turno» después de reservar devolvía «se me complicó».{FIN}")
+
+    doble = AturnoDoble()
+    F.configurar(doble)
+    servicios = await doble.listar_servicios(NEG)
+    error = P.error_tecnico()
+
+    # `_pedir_paso` es el que arma el pedido del paso actual, y termina en el
+    # error técnico para cualquier estado que no reconozca. Cada estado en el
+    # que la conversación puede quedarse tiene que tener su salida.
+    #
+    # No es un caso hipotético: `avanzar` devuelve `{}` cuando una intención no
+    # aplica en el paso —VER_MAS fuera del paso del horario, por ejemplo— y ese
+    # `{}` cae justo acá. Con el estado en CONFIRMADO, la persona recibía un
+    # error por pedir un segundo turno.
+    base = {
+        "mensaje": "hola", "servicio_id": "svc-corte", "profesional_id": "st-lean",
+        "fecha": dt.date.today().isoformat(), "hora": "09:00",
+        "nombre": "Ana Pérez", "opciones": [],
+    }
+    cfg = _cfg("t17", "Ana Pérez")["configurable"]
+
+    for estado in Estado:
+        conv = {**base, "estado": estado.value}
+        try:
+            paso = await F._pedir_paso(conv, cfg, NEG, "Peluquería Demo", servicios)
+            respuesta = paso.get("respuesta", "")
+        except Exception as e:  # noqa: BLE001
+            respuesta, error_str = "", f"explotó: {e}"
+            chequear(f"«{estado.value}» no explota", False, error_str)
+            continue
+        chequear(f"«{estado.value}» no cae en el error técnico",
+                 respuesta and respuesta != error,
+                 (respuesta or "vacío").splitlines()[0][:44])
+
+
 async def t16_el_techo_de_gasto_degrada_sin_romper():
     print(f"\n{NEGRITA}[16] CON EL TECHO DE GASTO TOCADO, EL BOT SIGUE ATENDIENDO{FIN}")
     print(f"{GRIS}  Quedarse sin crédito ya dejó a clientes nuevos sin poder sacar turno.{FIN}")
@@ -644,6 +682,7 @@ async def main():
     await t14_el_chequeo_de_salud_no_se_paga_dos_veces()
     await t15_el_nombre_no_gasta_modelo()
     await t16_el_techo_de_gasto_degrada_sin_romper()
+    await t17_ningun_paso_termina_en_el_error_tecnico()
 
     print(f"\n{'─' * 58}")
     print(f"{VERDE}Todo en verde.{FIN}" if ok else f"{ROJO}Hay bordes rotos.{FIN}")

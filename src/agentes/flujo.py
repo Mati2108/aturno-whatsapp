@@ -485,7 +485,19 @@ async def avanzar(conv: Conversacion, config) -> dict:
         estado = Estado.APERTURA
         conv = {**conv, "estado": estado.value, "servicio_id": None,
                 "profesional_id": None, "fecha": None, "hora": None}
-        cambios.update({"servicio_id": None, "profesional_id": None,
+        # `estado` va también en `cambios`, y eso NO es redundante.
+        #
+        # `conv` es lo que leen las ramas de acá abajo; `cambios` es lo que se
+        # guarda. Sin esta línea el reinicio existía sólo mientras corría esta
+        # función: cualquier rama que devolviera un dict propio —`{}` incluido—
+        # lo perdía, y la conversación se quedaba en CONFIRMADO para siempre.
+        #
+        # Así se veía: pedir un segundo turno dejaba el estado clavado, y el
+        # "1" siguiente ya no resolvía contra la lista que se acababa de
+        # mostrar. Andaba de casualidad, porque el camino normal pasa por
+        # `_abrir`, que sí devuelve el estado.
+        cambios.update({"estado": estado.value,
+                        "servicio_id": None, "profesional_id": None,
                         "fecha": None, "hora": None})
 
     # ---- "No" delante del resumen: NO se reserva, y no se pierde nada ----
@@ -565,7 +577,14 @@ async def avanzar(conv: Conversacion, config) -> dict:
         # Se queda en el mismo paso; lo único que se mueve es la ventana.
         if estado == Estado.ESPERANDO_HORARIO:
             return {"desde_horario": int(conv.get("desde_horario") or 0) + PAGINA}
-        return {}
+        # Fuera del paso del horario, "más" no significa nada — pero devolver
+        # `{}` PELADO tiraba lo que se hubiera reiniciado más arriba.
+        #
+        # Pasaba de verdad: el modelo lee "quiero otro turno" como ver_mas, la
+        # rama de CONFIRMADO ya había reiniciado el estado, y este `{}` lo
+        # descartaba. La conversación quedaba clavada en CONFIRMADO y el "1"
+        # siguiente ya no resolvía contra la lista recién mostrada.
+        return cambios
 
     if intent in (Intencion.DESCONOCIDO, Intencion.SALUDO):
         # Un saludo a mitad de flujo no reinicia nada: repite el pedido actual.
@@ -1185,7 +1204,23 @@ async def responder(conv: Conversacion, config) -> dict:
         # "no puedo hacer eso", que era lo que salía antes y hacía sonar la
         # pregunta como el problema.
         texto = datos.get("texto") or ""
-        return {"respuesta": P.respuesta_info(texto) if texto else P.sin_dato()}
+        if not texto:
+            return {"respuesta": P.sin_dato()}
+
+        # Contestar y callarse deja a la persona sin saber cómo seguir.
+        #
+        # Estaba al revés: cuando el bot NO sabía, `sin_dato` cerraba con
+        # "¿Querés que te saque un turno?"; cuando SÍ sabía, contestaba y
+        # terminaba ahí. O sea que contestar bien guiaba menos que contestar
+        # mal. `todos_los_caminos.py` lo marcaba en 4 de sus 49 caminos.
+        #
+        # El cierre es el pedido del paso en el que está, no una frase suelta:
+        # quien preguntó el precio a mitad de elegir el día tiene que volver a
+        # ver los días, no un "¿te saco un turno?" que ya está en curso.
+        paso = await _pedir_paso(conv, cfg, negocio, nombre_negocio,
+                                 await _aturno.listar_servicios(negocio))
+        return {"respuesta": P.respuesta_info(texto) + "\n\n" + paso["respuesta"],
+                "opciones": paso.get("opciones", [])}
 
     if especial == "silencio":
         # Cadena vacía: el webhook no manda nada. La persona ve el chat como lo
@@ -1331,6 +1366,38 @@ async def _pedir_paso(conv: Conversacion, cfg: dict, negocio: str,
             ),
             "opciones": ["sí", "no"],
         }
+
+    # ---- Los tres pasos que NO son del formulario ----
+    #
+    # Antes caían todos en el error técnico de abajo, y no era teórico: pedir un
+    # segundo turno después de reservar devolvía "Uy, se me complicó procesar
+    # eso". El camino era `avanzar` devolviendo `{}` —una intención que no
+    # aplica en el paso, como VER_MAS fuera del paso del horario— y ese `{}`
+    # termina justo acá.
+    #
+    # O sea que el error no lo producía un error: lo producía un hueco.
+
+    if estado == Estado.CONFIRMADO:
+        # Ya tiene su turno y escribió otra cosa. Lo que sigue es un pedido
+        # nuevo, así que se le muestra la apertura — el mismo lugar donde
+        # arranca cualquiera, con su nombre porque ya lo conocemos.
+        return {"respuesta": P.apertura(nombre_negocio, servicios,
+                                        conv.get("nombre") or cfg.get("nombre_cliente")),
+                "opciones": [s.nombre for s in servicios]}
+
+    if estado == Estado.ESPERANDO_SENIA:
+        # El horario está apartado y falta el pago: no hay ningún paso que
+        # pedir, hay uno que recordar.
+        return {"respuesta": P.falta_pagar(), "opciones": []}
+
+    if estado == Estado.EN_MANOS_HUMANAS:
+        # Acá el bot está callado a propósito y `responder` corta antes de
+        # llegar. Se contesta igual, y no con un error, porque un hueco en un
+        # camino que hoy no se recorre es el que muerde cuando alguien agrega
+        # el que sí lo recorre.
+        return {"respuesta": P.hablar_con_persona(
+                    nombre_negocio, await _aturno.contacto(negocio)),
+                "opciones": []}
 
     return {"respuesta": P.error_tecnico(), "opciones": []}
 
