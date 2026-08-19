@@ -276,6 +276,53 @@ observabilidad. Ese número es de otra medición y quedó viejo por partida dobl
 
 ---
 
+## 🔴 7 · ✅ Los 5 dólares en un día: era el chequeo de salud
+
+`/salud` llamaba al modelo en **cada request**, y Render lo pincha como
+`healthCheckPath` **cada 5 a 10 segundos** — su documentación dice que no es
+configurable. Corría 24 horas, escribiera alguien o no.
+
+| Quién | Llamadas/día | USD/día | USD/mes |
+|---|---:|---:|---:|
+| Render cada 5 s | 17.280 | **3,51** | 105,24 |
+| Render cada 10 s | 8.640 | **1,75** | 52,62 |
+| cron de GitHub | 144 | 0,03 | 0,88 |
+
+Entre el 35% y el 70% de los 5 dólares. El resto eran las pruebas.
+
+**Verificado en producción después del deploy:** 10 pings seguidos a `/salud`
+cuestan **cero** llamadas nuevas al modelo, y el endpoint bajó de ~1,1 s a
+~0,3 s. Ahorro: **~105 USD/mes**.
+
+Descartado por el camino, para que no quede la duda: el backend de aturno no usa
+Anthropic; la clave no está exportada en el shell, así que no la gasta Claude
+Code; el panel de conversaciones pincha Firestore, no al bot; y hay tope por
+teléfono y por minuto.
+
+### Lo que se agregó para que no vuelva a pasar
+
+**`/gasto`** — el servicio ahora sabe lo que gasta. Cuenta lo que informa cada
+respuesta, no una estimación, desglosado por motivo (`clasificar`, `salud`). Se
+engancha en `construir_modelo`, el único lugar por el que pasan todos los
+caminos al modelo, así que uno nuevo queda contado sin que nadie se acuerde.
+
+Esa era la causa de fondo: Phoenix mide esto y está apagado en producción, así
+que en el único lugar donde el gasto importa no había una sola métrica. Por eso
+hubo que deducirlo leyendo código.
+
+**`TOPE_DIARIO_USD`** (3 USD por defecto) — pasado el techo, el clasificador
+deja de llamar al modelo y todo cae en `DESCONOCIDO`. El bot **no se cae**: el
+88% de los mensajes ya se resuelve sin modelo, así que quien contesta con
+números saca su turno igual. Degradar es la falla correcta: la alternativa ya se
+probó sola cuando se acabó el crédito y ningún cliente nuevo pudo reservar.
+
+**`/salud` dejó de bloquearse contra Anthropic** — vencida la caché contesta con
+lo último que sabe y refresca por atrás. Render corta a los 15 s y reinicia la
+instancia si falla 60, así que acoplarle el liveness a que un tercero conteste
+rápido convertía un mal minuto del proveedor en un reinicio del bot.
+
+---
+
 ## 🟢 5 · Encontrado de paso
 
 Ninguno lo causaron los cambios de arriba: los verifiqué contra el árbol limpio.
