@@ -21,6 +21,7 @@ latencia real de un agente. Cambiarlo después sería rehacer esta capa entera.
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import logging
 
 import httpx
@@ -50,16 +51,23 @@ from src.aturno.base import ClienteAturno
 from src.aturno.doble import AturnoDoble
 from src.config import TENANTS, config, tenant_por_numero
 from src.fechas import ahora, calendario
+from src import plantillas as P
 from src.observabilidad import configurar_trazas, trazado_activo
 from src.rag.indice import modelo_en_uso, reindexar_negocio
 from src.schemas import MensajeEntrante, Tenant
 
 logger = logging.getLogger("pipeline.webhook")
 
-# Cuánto puede tardar el procesamiento antes de abandonarlo. Un turno normal
-# lleva ~2 segundos; treinta es holgado para un arranque en frío y sigue muy
-# por debajo de la paciencia de una persona esperando en WhatsApp.
-TECHO_SEGUNDOS = 30
+# Cuánto puede tardar el procesamiento antes de abandonarlo sale de la config
+# (`techo_segundos`): un turno normal lleva ~2 segundos y treinta es holgado
+# para un arranque en frío, sin pasarse de la paciencia de alguien esperando.
+
+# Hasta dónde se lee un mensaje entrante. WhatsApp deja mandar hasta 4096
+# caracteres y el esquema los rechazaba pasados de ahí, o sea que escribir de
+# más dejaba a la persona sin ninguna respuesta. Se recorta y se sigue: el
+# flujo vuelve a recortar a 400 antes del prompt, así que el costo ya está
+# acotado y esto sólo garantiza que el mensaje entre.
+LARGO_MAXIMO = 4096
 
 
 def _configurar_logs() -> None:
@@ -354,7 +362,13 @@ class Salud(BaseModel):
     que no encaja.
     """
 
-    estado: str = Field(description="'ok' si el servicio responde.")
+    estado: str = Field(
+        description="'ok' si el servicio responde Y puede pensar; "
+                    "'degradado' si está vivo pero el LLM no contesta.")
+    puede_responder: bool = Field(
+        default=True,
+        description="Si el LLM está accesible. En false el bot recibe y no entiende.")
+    detalle: str = Field(default="", description="Qué le pasa, cuando no está ok.")
     proveedor_llm: str = Field(description="Proveedor de LLM configurado.")
     embeddings: str = Field(description="Modelo de embeddings en uso.")
     aturno_modo: str = Field(description="'doble' en memoria o 'api' real.")
@@ -399,7 +413,7 @@ async def responder_desde_el_panel(
     await _pasar_a_manos_humanas(negocio.business_id, mensaje.telefono)
 
     try:
-        _enviar(mensaje.telefono, negocio, mensaje.texto)
+        await _enviar(mensaje.telefono, negocio, mensaje.texto)
     except Exception as e:  # noqa: BLE001
         logger.exception("el panel no pudo mandar el mensaje")
         return Enviado(enviado=False, detalle=str(e)[:120], momento=ahora().isoformat())
@@ -532,7 +546,7 @@ async def devolver_al_bot(
         return Enviado(enviado=False, detalle="ya la tenía el asistente",
                        momento=ahora().isoformat())
 
-    _enviar(mensaje.telefono, negocio, texto)
+    await _enviar(mensaje.telefono, negocio, texto)
     # en_manos_humanas=False: el bot la retomó. Es lo que apaga el botón.
     await avisar_a_aturno(evento(mensaje.business_id, mensaje.telefono, texto,
                                  de_quien="bot", en_manos_humanas=False))
@@ -581,12 +595,49 @@ def _hay_indice() -> bool:
         return False
 
 
+async def _llm_responde() -> tuple[bool, str]:
+    """¿El LLM contesta? Una llamada mínima, de un token.
+
+    Existe porque /salud decía "ok" con el modelo caído. El servicio estaba
+    vivo —contestaba HTTP— pero el clasificador fallaba en cada mensaje y caía
+    en DESCONOCIDO: el bot recibía y no entendía nada. El panel del negocio
+    leía ese "ok" y mostraba "conectado", así que el dueño veía todo en verde
+    mientras sus clientes no recibían respuesta.
+
+    Pasó de verdad, y por lo más tonto: se acabó el crédito de la cuenta. No es
+    un error de credencial —la clave es válida— así que ningún chequeo de
+    "¿está la API key?" lo agarra. Sólo lo agarra intentar.
+
+    Un chequeo de salud que no mira lo que hace falta para funcionar es peor
+    que ninguno: da confianza falsa justo cuando hay que ir a mirar.
+    """
+    cfg = config()
+    try:
+        import anthropic
+        await anthropic.AsyncAnthropic(api_key=cfg.anthropic_api_key).messages.create(
+            model=cfg.anthropic_modelo, max_tokens=1,
+            messages=[{"role": "user", "content": "."}])
+        return True, ""
+    except Exception as e:  # noqa: BLE001
+        texto = str(e)
+        if "credit balance" in texto or "billing" in texto.lower():
+            return False, "sin crédito en la cuenta del modelo"
+        if "401" in texto or "authentication" in texto.lower():
+            return False, "la clave del modelo no es válida"
+        if "429" in texto:
+            return False, "el modelo está limitando por cantidad de pedidos"
+        return False, texto[:80]
+
+
 @app.get("/salud", response_model=Salud)
 async def salud() -> Salud:
-    """Chequeo rápido: ¿está vivo y con qué configuración?"""
+    """Chequeo rápido: ¿está vivo, y además puede hacer su trabajo?"""
     cfg = config()
+    piensa, detalle = await _llm_responde()
     return Salud(
-        estado="ok",
+        estado="ok" if piensa else "degradado",
+        puede_responder=piensa,
+        detalle=detalle,
         proveedor_llm=cfg.provider,
         embeddings=modelo_en_uso().split("/")[-1],
         aturno_modo=cfg.aturno_modo,
@@ -609,8 +660,28 @@ async def whatsapp(
     request: Request,
     From: str = Form(...),  # noqa: N803 — Twilio manda estos nombres, en mayúscula
     To: str = Form(...),  # noqa: N803
-    Body: str = Form(...),  # noqa: N803
+    # `Body` con default y NO obligatorio, y esto no es un detalle de tipos.
+    #
+    # Un audio, una foto o un sticker llegan con `Body` VACÍO. Siendo
+    # obligatorio, FastAPI lo rechazaba con 422 antes de entrar acá: el webhook
+    # contestaba error, no se procesaba nada, y la persona que mandó un audio
+    # pidiendo turno no recibía absolutamente nada. Ni una respuesta, ni un
+    # aviso, ni un rastro más allá de un 422 en los logs. Medido: tres mensajes
+    # de prueba, cero respuestas.
+    #
+    # En Argentina una parte enorme de WhatsApp son notas de voz, así que ese
+    # silencio no era un caso raro: era media clientela hablándole a una pared.
+    Body: str = Form(default=""),  # noqa: N803
+    NumMedia: str = Form(default="0"),  # noqa: N803 — cuántos adjuntos vinieron
+    MediaContentType0: str = Form(default=""),  # noqa: N803 — de qué tipo es el primero
     MessageSid: str = Form(default=""),  # noqa: N803 — lo pide el indicador
+    # Una ubicación compartida NO es un adjunto: llega con `NumMedia=0` y los
+    # datos en estos dos campos. Sin leerlos, el mensaje quedaba sin texto y
+    # sin adjunto, `MensajeEntrante` lo rechazaba y salía un 400 — o sea, el
+    # mismo silencio absoluto que ya había pasado con las notas de voz, en el
+    # gesto que hace mucha gente cuando quiere saber dónde queda el local.
+    Latitude: str = Form(default=""),  # noqa: N803
+    Longitude: str = Form(default=""),  # noqa: N803
     x_twilio_signature: str = Header(default=""),
 ) -> PlainTextResponse:
     """Recibe un mensaje de WhatsApp, lo encola y contesta 200 al instante."""
@@ -618,6 +689,48 @@ async def whatsapp(
 
     if cfg.validar_firma:
         await _verificar_firma(request, x_twilio_signature)
+
+    if not Body.strip():
+        # No vino nada que leer. Puede ser un audio, una foto, un sticker, una
+        # ubicación o algo que Twilio ni siquiera nos manda como texto — y en
+        # los tres casos hay que CONTESTAR: el silencio se lee como "no me
+        # dieron bola", nunca como "no me entendió".
+        #
+        # La rama cubre todo lo que llegue sin texto, y no sólo lo que sabemos
+        # nombrar, justamente porque el modo de falla es el peor posible y no
+        # deja rastro: un 400 en los logs y una persona esperando.
+        #
+        # Se contesta acá y no en el flujo porque no hay nada que clasificar ni
+        # ningún paso que avanzar: no gasta LLM y no ensucia el estado de la
+        # conversación, que sigue donde estaba.
+        if _tiene_adjunto(NumMedia):
+            respuesta, que = P.solo_adjunto(MediaContentType0), MediaContentType0 or "?"
+        elif Latitude or Longitude:
+            respuesta, que = P.solo_ubicacion(), "ubicación"
+        else:
+            respuesta, que = P.sin_texto(), "vacío"
+        logger.info("mensaje sin texto de %s (%s)", From, que)
+        try:
+            # Se arma el mensaje PRIMERO y recién después se busca el negocio.
+            # `From`/`To` vienen como "whatsapp:+549…" y el tenant se busca por
+            # el número pelado: con el valor crudo no encontraba a nadie y el
+            # adjunto volvía a quedar sin respuesta, que es justo lo que este
+            # bloque vino a arreglar.
+            quien = MensajeEntrante(de=From, para=To, texto="(sin texto)")
+        except ValueError:
+            return PlainTextResponse("", status_code=200)
+        destino = tenant_por_numero(quien.para)
+        if destino is not None:
+            await _enviar(quien.de, destino, respuesta)
+        return PlainTextResponse("", status_code=200)
+
+    # Se recorta en el borde en vez de rechazar. El tope del esquema son 4096
+    # caracteres, y superarlo devolvía un 400: otra vez silencio, ahora por
+    # escribir de más. El flujo ya recorta a 400 antes del prompt, así que el
+    # tope no protege de ningún costo — sólo de que el mensaje llegue.
+    if len(Body) > LARGO_MAXIMO:
+        logger.info("mensaje de %d caracteres recortado a %d", len(Body), LARGO_MAXIMO)
+        Body = Body[:LARGO_MAXIMO]
 
     # Validar antes de encolar: si el payload viene raro, que falle acá y no
     # dentro de una tarea en segundo plano, donde el error no se ve.
@@ -632,6 +745,23 @@ async def whatsapp(
         # Alguien escribió a un número que no administramos. No es un error
         # nuestro; contestamos 200 para que Twilio no reintente.
         logger.warning("Mensaje a un número sin negocio asignado: %s", mensaje.para)
+        return PlainTextResponse("", status_code=200)
+
+    # El mismo mensaje dos veces es el mismo mensaje. Twilio reintenta cuando
+    # no le contestamos rápido, y aunque acá el 200 sale al instante, un corte
+    # de red en el medio alcanza para que reintente algo que ya se procesó: dos
+    # llamadas al modelo y dos respuestas idénticas a la misma persona.
+    if _ya_procesado(MessageSid):
+        logger.info("mensaje repetido de Twilio (sid=%s): lo ignoro", MessageSid)
+        return PlainTextResponse("", status_code=200)
+
+    # Y nadie puede hacerle gastar el saldo al negocio a fuerza de escribir.
+    atender, avisar = _pasa_el_limite(mensaje.de, _dt.datetime.now().timestamp())
+    if not atender:
+        logger.warning("%s pasó el tope de %d mensajes por minuto",
+                       mensaje.de, TOPE_POR_MINUTO)
+        if avisar:
+            await _enviar(mensaje.de, negocio, P.demasiados_mensajes())
         return PlainTextResponse("", status_code=200)
 
     logger.info("← %s (%s): %s", mensaje.de, negocio.nombre, mensaje.texto[:60])
@@ -667,7 +797,7 @@ async def _verificar_firma(request: Request, firma: str) -> None:
 
 
 # ---------- El trabajo de fondo ----------
-def _mostrar_escribiendo(message_sid: str) -> None:
+async def _mostrar_escribiendo(message_sid: str) -> None:
     """Prende el "escribiendo…" nativo de WhatsApp mientras el agente piensa.
 
     Un turno del agente puede tardar varios segundos y del otro lado no pasa
@@ -687,12 +817,16 @@ def _mostrar_escribiendo(message_sid: str) -> None:
         # AttributeError. Como el error se tragaba en un `except` amplio y se
         # logueaba en `debug` —que no se muestra—, el indicador NUNCA funcionó
         # y nada lo delataba. El endpoint real es v3.
-        r = httpx.post(
-            "https://messaging.twilio.com/v3/Indicators/Typing.json",
-            auth=(cfg.twilio_account_sid, cfg.twilio_auth_token),
-            json={"channel": "WHATSAPP", "messageId": message_sid},
-            timeout=4,
-        )
+        #
+        # Cliente ASÍNCRONO: la versión sincrónica bloqueaba el bucle hasta 4
+        # segundos, y con él a todas las demás conversaciones en curso. Un
+        # indicador es cosmético; frenar el servicio entero para dibujarlo, no.
+        async with httpx.AsyncClient(timeout=4) as http:
+            r = await http.post(
+                "https://messaging.twilio.com/v3/Indicators/Typing.json",
+                auth=(cfg.twilio_account_sid, cfg.twilio_auth_token),
+                json={"channel": "WHATSAPP", "messageId": message_sid},
+            )
         if r.status_code >= 400:
             # INFO y no debug: un indicador que no sale es cosmético, pero
             # tiene que poder verse en los logs. La versión anterior fallaba
@@ -700,6 +834,123 @@ def _mostrar_escribiendo(message_sid: str) -> None:
             logger.info("el indicador no salió (%d): %s", r.status_code, r.text[:100])
     except Exception as e:  # noqa: BLE001 — cosmético, no rompe el flujo
         logger.info("no se pudo mostrar el indicador: %s", e)
+
+
+def _tiene_adjunto(num_media: str) -> bool:
+    """Twilio manda NumMedia como texto, y a veces no lo manda."""
+    try:
+        return int(num_media or "0") > 0
+    except ValueError:
+        return False
+
+
+# Los últimos mensajes que ya se procesaron, para no contestarlos dos veces.
+#
+# En memoria y acotado: alcanza para lo que tiene que cubrir —un reintento de
+# Twilio llega en segundos— y no necesita ni base ni limpieza. Con varias
+# instancias cada una tiene el suyo, así que esto NO garantiza exactamente una
+# vez a nivel sistema; achica una ventana, no la cierra. La garantía de verdad
+# sería idempotencia por `MessageSid` en el checkpointer, y hoy no hace falta.
+_VISTOS_MAXIMO = 500
+_vistos: dict[str, None] = {}
+
+
+def _ya_procesado(message_sid: str) -> bool:
+    """¿Este mensaje ya se atendió? Lo marca de paso.
+
+    Sin SID no se puede saber, y ahí se prefiere contestar de más: perder un
+    mensaje es peor que mandar uno repetido.
+    """
+    if not message_sid:
+        return False
+    if message_sid in _vistos:
+        return True
+    _vistos[message_sid] = None
+    while len(_vistos) > _VISTOS_MAXIMO:
+        # El más viejo primero: los dict de Python conservan el orden de
+        # inserción, así que esto es una cola sin tener que importar una.
+        _vistos.pop(next(iter(_vistos)))
+    return False
+
+
+# Cuántos mensajes se le atienden a un mismo teléfono por minuto.
+#
+# Nada impedía que alguien mandara cien mensajes seguidos, y cada uno cuesta una
+# llamada al modelo y un mensaje saliente de Twilio: o sea que un desconocido
+# podía gastarle el saldo al negocio y, de paso, el cupo diario con el que sus
+# clientes reales tendrían que ser atendidos.
+#
+# Doce por minuto es holgado para una persona escribiendo —nadie manda uno cada
+# cinco segundos sosteniéndolo un minuto— y corta en seco a un script.
+TOPE_POR_MINUTO = 12
+VENTANA_SEGUNDOS = 60
+
+_recientes: dict[str, list[float]] = {}
+
+
+def _pasa_el_limite(telefono: str, ahora_seg: float) -> tuple[bool, bool]:
+    """¿Se le atiende este mensaje? Y si no, ¿hay que avisarle?
+
+    Devuelve `(atender, avisar)`. El aviso sale UNA sola vez por ventana: si
+    cada mensaje rechazado contestara, el límite no serviría de nada —seguiría
+    saliendo un mensaje de Twilio por cada uno— y quien esté golpeando la
+    puerta recibiría cien respuestas en vez de cien turnos.
+
+    Callarse del todo tampoco sirve: alguien que escribió rápido de nervioso
+    tiene que enterarse de por qué no le contestan, o cree que el bot murió.
+    """
+    marcas = [t for t in _recientes.get(telefono, []) if ahora_seg - t < VENTANA_SEGUNDOS]
+    _recientes[telefono] = marcas
+    if len(marcas) < TOPE_POR_MINUTO:
+        marcas.append(ahora_seg)
+        return True, False
+    # Se registra igual para que la ventana corra desde el último intento: el
+    # que sigue insistiendo no se gana un lugar por esperar a que expire el
+    # primero de la tanda.
+    marcas.append(ahora_seg)
+    return False, len(marcas) == TOPE_POR_MINUTO + 1
+
+
+# Un candado por conversación, para que dos mensajes de la misma persona no se
+# procesen encima.
+#
+# Pasa todo el tiempo en WhatsApp: alguien manda "hola" y "quiero un turno" con
+# un segundo de diferencia. Son dos tareas de fondo sobre el MISMO hilo del
+# checkpointer, las dos leen el estado anterior y las dos escriben — así que el
+# segundo mensaje se contesta como si el primero no hubiera existido, y el
+# estado que queda guardado es el de la que terminó última.
+#
+# Serializar por hilo y no globalmente: dos personas distintas no se estorban.
+_candados: dict[str, asyncio.Lock] = {}
+
+
+def _candado_de(hilo: str) -> asyncio.Lock:
+    """El candado de esta conversación. Se crea la primera vez y se reusa.
+
+    No se limpian, igual que en `aturno/api.py`: son objetos chicos, uno por
+    conversación viva en este proceso, y borrarlos mientras alguien espera es
+    justo la forma de que dos coroutines terminen con candados distintos.
+    """
+    return _candados.setdefault(hilo, asyncio.Lock())
+
+
+def _salidas_de_emergencia(negocio: Tenant) -> str | None:
+    """El link a la página del negocio, o None si no hay con qué armarlo.
+
+    Devuelve None y no una cadena vacía a propósito: las plantillas deciden qué
+    decir según haya link o no, y un link roto es peor que ninguno —la persona
+    lo abre, ve un 404 y concluye que el negocio no funciona—. Es la misma
+    regla que ya aplica `link_web`.
+
+    OJO: hoy en producción `ATURNO_WEB_URL` no está puesta, así que esto
+    devuelve None y los mensajes de demora ofrecen sólo la salida humana. Se ve
+    en GET /configuracion.
+    """
+    # `slug` y NO `business_id`: la página pública de aturno es /<slug>. El
+    # business_id es el uid de Firebase y ahí no hay ninguna página — el link
+    # daría 404, que es justo lo que esta función existe para evitar.
+    base = (config().aturno_web_url or "").rstrip("/")
+    return f"{base}/{negocio.slug}" if base else None
 
 
 async def _procesar_y_responder(
@@ -710,9 +961,48 @@ async def _procesar_y_responder(
     Corre fuera del ciclo del request, así que si explota nadie se entera y la
     persona se queda esperando para siempre. Por eso el try/except amplio y el
     mensaje de disculpa: siempre es mejor contestar algo que no contestar.
-    """
-    _mostrar_escribiendo(message_sid)
 
+    Todo el cuerpo va bajo el candado de ESTA conversación. Dos mensajes
+    seguidos de la misma persona —lo más común del mundo en WhatsApp: "hola" y
+    después "quiero un turno"— llegaban como dos tareas de fondo en paralelo
+    sobre el mismo hilo del checkpointer: las dos leían el estado anterior, las
+    dos escribían, y la segunda se contestaba como si la primera no hubiera
+    existido. El candado no demora nada cuando no hay concurrencia y ordena la
+    conversación cuando la hay.
+    """
+    async with _candado_de(hilo_de(negocio.business_id, mensaje.de)):
+        await _procesar_bajo_candado(mensaje, negocio, message_sid)
+
+
+async def _procesar_bajo_candado(
+    mensaje: MensajeEntrante, negocio: Tenant, message_sid: str
+) -> None:
+    """El trabajo de verdad. Separado sólo para que el candado se lea de un vistazo."""
+    cfg = config()
+    codigo_senia = None
+    datos_senia: dict = {}
+    await _mostrar_escribiendo(message_sid)
+    salidas = _salidas_de_emergencia(negocio)
+
+    async def _avisar_demora() -> None:
+        """Manda la señal de vida a los `aviso_segundos` y no toca nada más.
+
+        Va como tarea aparte y NO como un `wait_for` más corto, y esa es toda
+        la diferencia: cortar a los diez segundos tiraría a la basura trabajo
+        que iba a terminar bien a los veinte —el backend de aturno arranca en
+        frío y tarda eso— y la persona se quedaría sin la respuesta que ya casi
+        estaba. Acá se avisa y se sigue: el mensaje real llega igual, después.
+        """
+        try:
+            await asyncio.sleep(cfg.aviso_segundos)
+            logger.info("aviso de demora a %s (%ds)", mensaje.de, cfg.aviso_segundos)
+            await _enviar(mensaje.de, negocio, P.demorado(negocio.nombre, salidas))
+        except asyncio.CancelledError:
+            pass                      # llegó a tiempo: no hay nada que avisar
+        except Exception:  # noqa: BLE001 — un aviso que falla no rompe la respuesta
+            logger.warning("no se pudo avisar la demora a %s", mensaje.de, exc_info=True)
+
+    aviso = asyncio.create_task(_avisar_demora())
     try:
         # Con techo de tiempo. Un except no alcanza: si el procesamiento se
         # CUELGA en vez de fallar —una conexión a la base que no responde, una
@@ -721,23 +1011,25 @@ async def _procesar_y_responder(
         # el webhook devolvía 200 y no salía ninguna respuesta, ni siquiera un
         # error.
         texto = await asyncio.wait_for(
-            _componer_respuesta(mensaje, negocio), timeout=TECHO_SEGUNDOS
+            _componer_respuesta(mensaje, negocio), timeout=cfg.techo_segundos
         )
     except asyncio.TimeoutError:
         logger.error(
             "El procesamiento de %s superó los %ds y se abandonó",
-            mensaje.de, TECHO_SEGUNDOS,
+            mensaje.de, cfg.techo_segundos,
         )
-        texto = (
-            "Perdón, estoy tardando más de lo normal. "
-            "¿Me lo mandás de nuevo?"
-        )
+        # Antes decía "¿me lo mandás de nuevo?", que le devuelve el trabajo a
+        # la persona: reintentar contra algo que acaba de fallar es lo último
+        # que quiere hacer, y probablemente falle otra vez.
+        texto = P.no_pudo_contestar(negocio.nombre, salidas)
     except Exception:  # noqa: BLE001 — el usuario merece una respuesta igual
         logger.exception("Falló al procesar el mensaje de %s", mensaje.de)
-        texto = (
-            "Uy, tuve un problema para procesar tu mensaje. "
-            "¿Probás de nuevo en un minuto?"
-        )
+        texto = P.no_pudo_contestar(negocio.nombre, salidas)
+    finally:
+        # Se cancela SIEMPRE, incluso cuando hubo error: si la respuesta ya
+        # salió —aunque sea la de disculpa— avisar después que "está tardando"
+        # es peor que no avisar nada.
+        aviso.cancel()
 
     # El panel ve la conversación entera, no solo las escalaciones. Un dueño
     # que solo recibe el aviso "alguien pidió una persona" tiene que adivinar
@@ -755,6 +1047,8 @@ async def _procesar_y_responder(
             # Sale de la misma lectura que ya se hacía: pedirlo aparte sería
             # una consulta más por mensaje para un dato que ya está en la mano.
             nombre_dado = (st.values or {}).get("nombre")
+            datos_senia = (st.values or {}).get("_datos") or {}
+            codigo_senia = (st.values or {}).get("codigo_pendiente")
         except Exception:  # noqa: BLE001
             pass
 
@@ -771,10 +1065,113 @@ async def _procesar_y_responder(
         logger.info("sin respuesta para %s (conversación escalada)", mensaje.de)
         return
 
-    _enviar(mensaje.de, negocio, texto)
+    await _enviar(mensaje.de, negocio, texto)
     await avisar_a_aturno(evento(
         negocio.business_id, mensaje.de, texto, de_quien="bot", paso=estado_ahora,
         nombre=nombre_dado))
+
+    # Recién acá se larga la vigilancia de la seña: DESPUÉS de que el link haya
+    # salido de verdad. Lanzarla antes dejaría corriendo un vigilante para un
+    # mensaje que no llegó, y la persona recibiría "se venció el tiempo para
+    # pagar" sin haber recibido nunca dónde pagar.
+    #
+    # Va como tarea suelta porque dura minutos y esto tiene que devolver ya: el
+    # candado de la conversación se libera al salir, así que la persona puede
+    # seguir escribiendo mientras el vigilante espera.
+    if estado_ahora == Estado.ESPERANDO_SENIA.value and codigo_senia:
+        asyncio.create_task(_vigilar_senia(
+            negocio, mensaje.de, codigo_senia,
+            datos_senia.get("minutos") or 15, datos_senia))
+
+
+# Cada cuánto se le pregunta a aturno si entró la seña.
+#
+# Veinte segundos: lo suficientemente seguido como para que el "listo,
+# confirmado" llegue mientras la persona todavía tiene el teléfono en la mano
+# —acaba de pagar— y lo suficientemente espaciado como para no golpear el
+# endpoint público, que además tiene su propio limitador por código.
+ESPERA_ENTRE_CONSULTAS = 20
+
+
+async def _vigilar_senia(negocio: Tenant, telefono: str, codigo: str,
+                         minutos: int, datos: dict) -> None:
+    """Espera a que entre el pago y avisa. O avisa que se venció.
+
+    POR QUÉ HACE FALTA
+    Mercado Pago le confirma el pago a aturno por webhook, no al bot. Del lado
+    del chat, lo último que la persona leyó fue "te falta pagar la seña": paga,
+    cierra la pestaña, y no vuelve a saber nada. Quien duda si el turno salió
+    llama al local o reserva de nuevo — las dos cosas que el bot vino a evitar.
+
+    POR QUÉ CONSULTANDO Y NO ESPERANDO UN AVISO
+    Lo correcto a la larga es que aturno avise cuando confirma el pago, y para
+    eso hay que agregar un endpoint acá y una llamada allá. Consultar alcanza
+    para lo que dura esto —quince minutos, un puñado de consultas— y no pide
+    tocar los dos repos a la vez. Si el volumen crece, el reemplazo es este
+    archivo y nada más.
+
+    NUNCA LANZA, y el silencio tiene una regla: sólo se avisa el vencimiento
+    cuando aturno CONTESTÓ que sigue esperando. Si la consulta falla no se dice
+    nada, porque "se venció y solté el horario" es una frase que no se le puede
+    decir por error a alguien que pagó.
+    """
+    limite = minutos or 15
+    intentos = max(1, (limite * 60) // ESPERA_ENTRE_CONSULTAS)
+    ultima = None
+    try:
+        for _ in range(intentos):
+            await asyncio.sleep(ESPERA_ENTRE_CONSULTAS)
+            ultima = await aturno.senia_pagada(negocio.business_id, codigo)
+            if ultima is True:
+                logger.info("entró la seña de %s (%s)", telefono, codigo)
+                texto = P.senia_confirmada(
+                    datos.get("servicio") or "Tu turno", datos.get("profesional"),
+                    _dt.date.fromisoformat(datos["fecha"]),
+                    _dt.datetime.strptime(datos["hora"], "%H:%M").time(),
+                    codigo,
+                )
+                await _enviar(telefono, negocio, texto)
+                await avisar_a_aturno(evento(negocio.business_id, telefono, texto,
+                                             de_quien="bot"))
+                await _marcar_confirmado(negocio.business_id, telefono)
+                return
+
+        if ultima is False:
+            # Contestó, y contestó que sigue esperando: recién ahí se puede
+            # decir que se venció. Con `None` no se dice nada.
+            logger.info("venció la seña de %s (%s)", telefono, codigo)
+            texto = P.senia_vencida()
+            await _enviar(telefono, negocio, texto)
+            await avisar_a_aturno(evento(negocio.business_id, telefono, texto,
+                                         de_quien="bot"))
+            await _marcar_confirmado(negocio.business_id, telefono, pagada=False)
+        else:
+            logger.warning("no se pudo saber si %s pagó la seña %s: no aviso nada",
+                           telefono, codigo)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — vigilar no puede tumbar nada
+        logger.exception("falló la vigilancia de la seña de %s", telefono)
+
+
+async def _marcar_confirmado(business_id: str, telefono: str, pagada: bool = True) -> None:
+    """Saca la conversación de `esperando_senia` una vez resuelta.
+
+    Se escribe directo en el checkpointer y no se hace pasar un mensaje por el
+    grafo, por lo mismo que `_pasar_a_manos_humanas`: acá no habló nadie. Sin
+    esto, la conversación queda esperando un pago que ya entró, y el próximo
+    "hola" recibe "sigo esperando el pago".
+    """
+    if _grafo is None:
+        return
+    cfg = {"configurable": {"thread_id": hilo_de(business_id, telefono)}}
+    try:
+        await _grafo.aupdate_state(cfg, {
+            "estado": (Estado.CONFIRMADO if pagada else Estado.APERTURA).value,
+            "codigo_pendiente": None,
+        })
+    except Exception:  # noqa: BLE001
+        logger.warning("no se pudo cerrar la espera de la seña", exc_info=True)
 
 
 async def _componer_respuesta(mensaje: MensajeEntrante, negocio: Tenant) -> str:
@@ -817,13 +1214,34 @@ async def _componer_respuesta(mensaje: MensajeEntrante, negocio: Tenant) -> str:
     return salida["respuesta"]
 
 
-def _enviar(destino: str, negocio: Tenant, texto: str) -> None:
-    """Manda el mensaje por la API REST de Twilio."""
+async def _enviar(destino: str, negocio: Tenant, texto: str) -> None:
+    """Manda el mensaje por la API REST de Twilio, o lo imprime.
+
+    Con `TWILIO_MODO=consola` no sale nada hacia afuera: se imprime lo que se
+    habría mandado, con la hora, y se sigue. Sirve para probar el producto
+    entero sin gastar del tope de 50 mensajes diarios de la cuenta trial —y
+    para VER el orden y el tiempo en que salen, que es justo lo que no se puede
+    revisar leyendo el código.
+
+    El envío va a un hilo aparte porque el SDK de Twilio es sincrónico: llamarlo
+    derecho desde acá frenaba el bucle de eventos lo que tardara la llamada, y
+    con varias conversaciones a la vez las respuestas se hacían fila detrás de
+    una sola. Es el mismo motivo por el que el reindexado usa `to_thread`.
+    """
+    if config().twilio_modo == "consola":
+        marca = _dt.datetime.now().strftime("%H:%M:%S")
+        print(f"\n──── [{marca}] → {destino} ──────────────────────────")
+        print(texto)
+        print("─" * 58, flush=True)
+        logger.info("→ %s (modo consola, no se envió)", destino)
+        return
     try:
-        enviado = _twilio().messages.create(
-            from_=f"whatsapp:{negocio.numero_whatsapp}",
-            to=f"whatsapp:{destino}",
-            body=texto,
+        enviado = await asyncio.to_thread(
+            lambda: _twilio().messages.create(
+                from_=f"whatsapp:{negocio.numero_whatsapp}",
+                to=f"whatsapp:{destino}",
+                body=texto,
+            )
         )
         logger.info("→ %s enviado (sid=%s)", destino, enviado.sid)
     except Exception:  # noqa: BLE001

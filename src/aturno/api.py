@@ -76,6 +76,53 @@ from src.schemas import (
 
 logger = logging.getLogger("pipeline.aturno.api")
 
+
+def _senia_estimada(servicio: dict) -> int:
+    """La seña, calculada igual que la calcula aturno. Sólo para proponerla.
+
+    Es una copia deliberada de `calcularSenia` (backend/src/senas.js): mismo
+    default de 50%, mismo redondeo a peso entero. Existe porque el cuerpo de la
+    reserva lleva un `depositAmount` y el endpoint del link también.
+
+    Lo importante es que NO decide nada: el servidor recalcula la seña desde el
+    `depositConfig` del servicio real antes de cobrar, descarta lo que le
+    mandemos si no coincide, y devuelve el número que efectivamente cobró. Ese
+    —y no éste— es el que se le muestra a la persona. Si algún día las dos
+    cuentas se separan, el que manda sigue siendo el servidor.
+    """
+    config = servicio.get("depositConfig") or {}
+    try:
+        cantidad = float(config.get("amount", 50))
+    except (TypeError, ValueError):
+        return 0
+    if cantidad < 0:
+        return 0
+    try:
+        precio = float(servicio.get("price") or 0)
+    except (TypeError, ValueError):
+        precio = 0.0
+    bruto = precio * cantidad / 100 if config.get("type", "percentage") == "percentage" else cantidad
+    return max(0, round(bruto))
+
+
+def _minutos_hasta(vencimiento: str | None) -> int | None:
+    """Cuántos minutos faltan para ese instante ISO, redondeando hacia abajo.
+
+    Sale de lo que contestó aturno y no de una constante de este lado: la
+    retención del horario y el vencimiento del link son el mismo reloj allá, y
+    duplicar el número acá es la forma de que algún día dejen de coincidir.
+    Devuelve `None` si no vino o no se entiende, y ahí el mensaje simplemente no
+    promete un tiempo — mejor que prometer uno equivocado.
+    """
+    if not vencimiento:
+        return None
+    try:
+        falta = datetime.fromisoformat(vencimiento.replace("Z", "+00:00")) - datetime.now(TZ)
+    except (ValueError, TypeError):
+        return None
+    minutos = int(falta.total_seconds() // 60)
+    return minutos if minutos > 0 else None
+
 # Los nombres de día tal como los guarda aturno en `schedule`.
 DIAS_JS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
@@ -272,6 +319,9 @@ class AturnoAPI(ClienteAturno):
                 nombre=str(s["name"]),
                 duracion_minutos=int(s.get("duration") or 30),
                 precio=float(s.get("price") or 0),
+                # Para poder avisar la seña en el resumen, antes de reservar.
+                requiere_senia=bool(s.get("requiresDeposit")),
+                senia=_senia_estimada(s),
             ))
         return salida
 
@@ -665,6 +715,17 @@ class AturnoAPI(ClienteAturno):
         la persona confirmó pueden pasar minutos, y en el medio alguien pudo
         tomarlo desde la página. Eso es un resultado normal que el bot tiene
         que poder contar, así que vuelve como RECHAZADO con motivo.
+
+        SERVICIOS CON SEÑA
+        ------------------
+        Si el servicio pide depósito, el turno NO nace confirmado: nace en
+        `pending_deposit`, que aparta el horario mientras la persona paga y lo
+        suelta solo si no paga. Hasta ahora el bot no mandaba `depositInfo`, así
+        que aturno lo leía como un turno sin seña y lo daba por firme — o sea
+        que **por WhatsApp se salteaba el depósito que la web sí cobra**.
+
+        `requiresDeposit` sale del servicio REAL de la base, no de nada que
+        arme el bot: es el negocio el que decide si su servicio se seña.
         """
         servicio = await self._servicio_crudo(business_id, servicio_id)
 
@@ -711,19 +772,85 @@ class AturnoAPI(ClienteAturno):
             cuerpo["staff"] = {"id": profesional_id,
                                "name": (persona or {}).get("name")}
 
+        # ---- ¿Este servicio se seña? ----
+        #
+        # `requiresDeposit` viaja adentro de `service`, y aturno lo lee de ahí
+        # —del cuerpo del request— para decidir el estado inicial. O sea que
+        # omitirlo alcanza para saltear la seña: por eso se copia del servicio
+        # real y no se deja que lo arme nadie más.
+        #
+        # `depositInfo.status = 'pending_payment'` es lo que hace que la reserva
+        # nazca en `pending_deposit` en vez de firme (ver `estadoInicial` en
+        # backend/src/reservas.js). El monto que va acá es informativo: el
+        # servidor lo recalcula desde el `depositConfig` del servicio antes de
+        # cobrar, y si no coinciden manda el suyo y deja el aviso en el log.
+        con_senia = bool(servicio.get("requiresDeposit"))
+        if con_senia:
+            cuerpo["service"]["requiresDeposit"] = True
+            cuerpo["depositInfo"] = {
+                "status": "pending_payment",
+                "depositAmount": _senia_estimada(servicio),
+                "paymentMethod": {"id": "mercadopago", "name": "MercadoPago"},
+            }
+
         r = await self._http.post(f"{self._base}/api/bookings", json=cuerpo)
 
         if r.status_code == 201:
             datos = r.json()
             logger.info("turno creado en aturno: %s", datos.get("bookingId"))
-            return TurnoConfirmado(
-                estado=EstadoDelTurno.CONFIRMADO,
+            base = dict(
                 booking_id=datos.get("bookingId"),
                 codigo=datos.get("code"),
                 fecha=dia, hora=hora, servicio=servicio.get("name"),
                 # Quién quedó asignado, aunque la persona haya dicho que le
                 # daba igual: es la información que necesita cuando llega.
                 profesional=(cuerpo.get("staff") or {}).get("name"),
+            )
+            if not con_senia:
+                return TurnoConfirmado(estado=EstadoDelTurno.CONFIRMADO, **base)
+
+            # El turno existe y tiene el horario apartado, pero todavía no es de
+            # nadie. Falta el link, que es lo único que la persona puede hacer.
+            pago = await self._link_de_senia(datos.get("bookingId"), cliente, servicio)
+            if pago is not None:
+                # El plazo que se le promete a la persona sale de la RESERVA, no
+                # de la respuesta del link.
+                #
+                # `holdExpiresAt` es el campo que de verdad decide cuándo se
+                # suelta el horario; el `expiresAt` del link es otro número, y
+                # medido contra producción decía 30 minutos cuando la retención
+                # duraba 5. O sea que el bot prometía seis veces el tiempo que
+                # la persona tenía para pagar.
+                #
+                # Ese `expiresAt` está arreglado del lado de aturno, pero el
+                # arreglo bueno es este: leer el dato de donde se decide y no de
+                # donde se repite. Así el mensaje dice la verdad aunque el
+                # backend todavía no esté desplegado, y sigue diciéndola si
+                # mañana cambia la duración.
+                minutos = await self._minutos_apartado(
+                    business_id, datos.get("code"))
+                if minutos is not None:
+                    pago["minutos"] = minutos
+            if pago is None:
+                # Sin link no hay forma de pagar, así que no se promete un turno
+                # que no existe: vuelve como rechazado y se le ofrece la web.
+                #
+                # La reserva creada NO se cancela a mano: quedó en
+                # `pending_deposit` con su vencimiento, así que suelta el
+                # horario sola. Es exactamente para esto que la retención vence
+                # —y el endpoint público de cancelar exige dos horas de
+                # anticipación, así que para un turno de hoy no serviría.
+                logger.warning("seña sin link para %s: el turno queda sin confirmar",
+                               datos.get("bookingId"))
+                return TurnoConfirmado(
+                    estado=EstadoDelTurno.RECHAZADO,
+                    fecha=dia, hora=hora, servicio=servicio.get("name"),
+                    motivo_del_rechazo="no_se_pudo_cobrar_la_senia",
+                )
+            return TurnoConfirmado(
+                estado=EstadoDelTurno.PENDIENTE_DE_SENA,
+                senia=pago["monto"], link_de_pago=pago["link"],
+                minutos_de_retencion=pago["minutos"], **base,
             )
 
         motivo = "Ese horario ya no está disponible"
@@ -738,3 +865,139 @@ class AturnoAPI(ClienteAturno):
             fecha=dia, hora=hora, servicio=servicio.get("name"),
             motivo_del_rechazo=motivo,
         )
+
+    async def _minutos_apartado(self, business_id: str, codigo: str | None) -> int | None:
+        """Cuántos minutos queda apartado el horario, según la propia reserva.
+
+        Sale de `holdExpiresAt`, que es el campo con el que aturno decide si la
+        retención sigue viva (`ocupaElHorario` lo compara contra el instante de
+        cada consulta). Cualquier otro número que se le diga a la persona es una
+        promesa que no la respalda nadie.
+
+        Es una consulta más por reserva con seña, y se paga con gusto: es el
+        único momento en que el bot le pone un reloj a alguien, y equivocarse ahí
+        significa que la persona deja de apurarse creyendo que le sobra tiempo.
+
+        `None` si no se puede saber, y ahí quien llama se queda con lo que haya:
+        el mensaje sabe decir "un rato" cuando no hay número.
+        """
+        if not codigo:
+            return None
+        try:
+            r = await self._http.get(
+                f"{self._base}/api/bookings/by-code/{codigo}",
+                params={"businessId": await self._uid(business_id)},
+            )
+            reserva = (r.json() or {}).get("booking") or {}
+        except Exception:  # noqa: BLE001 — mejor sin número que con uno inventado
+            logger.warning("no se pudo leer la retención de %s", codigo, exc_info=True)
+            return None
+        return _minutos_hasta(reserva.get("holdExpiresAt"))
+
+    async def senia_pagada(self, business_id: str, codigo: str) -> bool | None:
+        """Le pregunta a aturno si la reserva de ese código ya dejó de esperar.
+
+        Se consulta por CÓDIGO y no por id de reserva porque el endpoint por
+        código es público —el código es la credencial que el cliente ya tiene— y
+        este servicio no maneja credenciales de Firebase. El mismo camino que
+        usa la persona para ver su turno.
+
+        Lo que se mira es el estado: `pending_deposit` es "sigue esperando", y
+        cualquier otro estado vivo significa que el pago entró y aturno la
+        movió. Ante cualquier duda —red, 404, un cuerpo raro— devuelve `None`,
+        que quien llama sabe distinguir de "todavía no".
+        """
+        if not codigo:
+            return None
+        try:
+            r = await self._http.get(
+                f"{self._base}/api/bookings/by-code/{codigo}",
+                params={"businessId": await self._uid(business_id)},
+            )
+        except Exception:  # noqa: BLE001 — no saber no es saber que no pagó
+            logger.warning("no se pudo consultar la seña de %s", codigo, exc_info=True)
+            return None
+
+        if r.status_code != 200:
+            logger.info("consulta de seña %s devolvió %d", codigo, r.status_code)
+            return None
+        try:
+            reserva = (r.json() or {}).get("booking") or {}
+        except Exception:  # noqa: BLE001
+            return None
+
+        estado = reserva.get("status")
+        if not estado:
+            return None
+        if estado == "pending_deposit":
+            return False
+        if estado in ("cancelled", "rejected"):
+            # No está esperando, pero tampoco se pagó. Se trata como "no sé":
+            # avisar "listo, confirmado" por un turno cancelado sería peor que
+            # no decir nada.
+            logger.info("la reserva %s terminó en %s", codigo, estado)
+            return None
+        return True
+
+    async def _link_de_senia(self, booking_id: str | None, cliente: DatosDelCliente,
+                             servicio: dict) -> dict | None:
+        """Pide el link de Mercado Pago para la seña de esta reserva.
+
+        Devuelve `None` ante cualquier problema, y eso NO es tragar el error: es
+        un resultado posible y frecuente. El link se genera con el token de
+        Mercado Pago del negocio, que puede no estar conectado, haber vencido, o
+        estar caído del lado de Mercado Pago. Quien llama decide qué hacer —y lo
+        que hace es no prometer el turno.
+
+        El monto que devuelve es el que calculó el SERVIDOR, no el que mandamos:
+        `create-link` recalcula la seña desde el `depositConfig` del servicio
+        real y avisa en su log si el cliente propuso otra cosa. Mostrar el
+        nuestro cuando el servidor cobró otro sería la peor variante posible.
+        """
+        if not booking_id:
+            return None
+        try:
+            r = await self._http.post(
+                f"{self._base}/api/payments/mercadopago/create-link",
+                json={
+                    "bookingId": booking_id,
+                    "depositAmount": _senia_estimada(servicio),
+                    "description": f"Seña - {servicio.get('name') or 'Turno'}",
+                    "customerName": cliente.nombre or "",
+                    "customerEmail": cliente.email or "",
+                    "customerPhone": cliente.telefono or "",
+                },
+            )
+        except Exception:  # noqa: BLE001 — sin link, el turno no se promete
+            logger.exception("no se pudo pedir el link de seña de %s", booking_id)
+            return None
+
+        if r.status_code != 200:
+            # El 400 con `motivo` es el caso interesante: Mercado Pago no está
+            # disponible para ESTE negocio (sin conectar, o token vencido). Va al
+            # log con el motivo porque es algo que el dueño tiene que arreglar en
+            # su panel, y no hay ninguna otra señal de que esté pasando.
+            detalle = ""
+            try:
+                detalle = str(r.json())[:160]
+            except Exception:
+                detalle = r.text[:160]
+            logger.error("create-link devolvió %d para %s: %s",
+                         r.status_code, booking_id, detalle)
+            return None
+
+        datos = r.json()
+        link = datos.get("paymentLink")
+        if not link:
+            logger.error("create-link contestó 200 sin link para %s", booking_id)
+            return None
+
+        # Cuánto le queda para pagar, leído de lo que contestó el servidor y no
+        # de una constante de este lado. La retención del horario y el
+        # vencimiento del link son el MISMO reloj en aturno; duplicar el número
+        # acá sería la forma de que algún día dejen de coincidir y alguien pague
+        # un horario ya liberado.
+        minutos = _minutos_hasta(datos.get("expiresAt"))
+        return {"link": link,
+                "monto": datos.get("depositAmount") or _senia_estimada(servicio),
+                "minutos": minutos}

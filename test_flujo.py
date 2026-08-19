@@ -9,6 +9,7 @@ bot cuando el LLM redactaba.
   2. Ningún listado sale horizontal.
   3. El usuario nunca ve JSON, ids internos ni un objeto crudo.
   4. El orden de pasos se respeta aunque el input intente saltearlo.
+  5. Reservarle a otra persona no te reescribe a vos.
 
     python test_flujo.py
 """
@@ -158,6 +159,71 @@ async def t4_orden_inviolable(g):
              antes["estado"] == Estado.ESPERANDO_HORARIO.value, antes["estado"])
 
 
+async def t5_nombre_del_turno_no_pisa_al_contacto(g):
+    """Sacarle un turno a otro no te cambia el nombre a vos.
+
+    El caso real: el teléfono es de Matías, saca un turno para Milagros y lo
+    corrige en el resumen. Antes eso reescribía su identidad —el "nombre
+    recordado" se leía del mismo campo— y a partir de ahí el bot lo saludaba
+    Milagros y le ponía ese nombre a todos sus turnos siguientes.
+    """
+    print("\n[5] RESERVARLE A OTRO NO TE REESCRIBE A VOS")
+    hilo = "nombres-1"
+
+    # Se presenta y llega hasta la confirmación.
+    await hablar(g, hilo, "hola")
+    await hablar(g, hilo, "quiero un corte")
+    for texto in ("1", "1", "1"):
+        _, est = await hablar(g, hilo, texto)
+        if est.get("estado") == Estado.ESPERANDO_NOMBRE.value:
+            break
+    _, est = await hablar(g, hilo, "Matías Caló")
+    chequear("el nombre que dio queda como contacto",
+             est.get("nombre") == "Matías Caló", str(est.get("nombre")))
+
+    # En el resumen corrige: el turno es para otra persona.
+    _, est = await hablar(g, hilo, "Milagros Caló")
+    chequear("el nombre corregido va al TURNO",
+             est.get("nombre_del_turno") == "Milagros Caló",
+             str(est.get("nombre_del_turno")))
+    chequear("y el contacto sigue siendo el mismo",
+             est.get("nombre") == "Matías Caló", str(est.get("nombre")))
+
+    # Confirma: el turno se crea a nombre de Milagros...
+    texto, est = await hablar(g, hilo, "sí")
+    if est.get("estado") == Estado.CONFIRMADO.value:
+        chequear("después de reservar, el nombre del turno se limpia",
+                 not est.get("nombre_del_turno"), str(est.get("nombre_del_turno")))
+        chequear("y el contacto sobrevive a la reserva",
+                 est.get("nombre") == "Matías Caló", str(est.get("nombre")))
+    else:
+        chequear("llegó a confirmar", False, est.get("estado"))
+
+
+async def t6_el_resumen_pregunta_si_el_nombre_es_de_memoria(g):
+    """Con el nombre traído de otra conversación, el resumen pregunta.
+
+    Mostrarlo como un hecho invita a leerlo por arriba y contestar que sí, que
+    es justamente como el turno termina a nombre de quien no era.
+    """
+    print("\n[6] EL NOMBRE DE MEMORIA SE PREGUNTA, NO SE AFIRMA")
+    hilo = "nombres-2"
+    conocido = "Matías Caló"
+
+    await hablar(g, hilo, "hola", conocido)
+    await hablar(g, hilo, "quiero un corte", conocido)
+    texto = ""
+    for entrada in ("1", "1", "1", "1"):
+        texto, est = await hablar(g, hilo, entrada, conocido)
+        if est.get("estado") == Estado.ESPERANDO_CONFIRMACION.value:
+            break
+
+    chequear("el resumen pregunta a nombre de quién va",
+             "¿Va a nombre de" in texto, texto.splitlines()[-2:] and texto[-90:])
+    chequear("y aclara de dónde salió ese nombre",
+             "me diste antes" in texto)
+
+
 async def main():
     F.configurar(AturnoDoble())
     g = F.construir_flujo(MemorySaver())
@@ -170,6 +236,8 @@ async def main():
     await t2_listados_verticales(g)
     await t3_nunca_json(g)
     await t4_orden_inviolable(g)
+    await t5_nombre_del_turno_no_pisa_al_contacto(g)
+    await t6_el_resumen_pregunta_si_el_nombre_es_de_memoria(g)
 
     print("\n" + "═" * 66)
     print("  RESULTADO:", "TODOS LOS INVARIANTES SE CUMPLEN" if ok else "HAY FALLAS")

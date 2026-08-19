@@ -296,7 +296,8 @@ def lista_horarios(dia: date, horarios: list, maximo: int = 8) -> str:
 # ══════════════════════════════════════════════════════════════════
 
 def resumen(servicio: str, staff: str | None, dia: date, hora,
-            cliente: str | None = None) -> str:
+            cliente: str | None = None, de_memoria: bool = False,
+            senia: int = 0) -> str:
     """Todo lo que se va a reservar, incluido A NOMBRE DE QUIÉN.
 
     El nombre faltaba, y es el dato más fácil de que esté mal sin que nadie se
@@ -307,16 +308,40 @@ def resumen(servicio: str, staff: str | None, dia: date, hora,
 
     Mostrarlo es la mitad; la otra es poder corregirlo sin volver atrás, y por
     eso la línea de abajo dice cómo.
+
+    `de_memoria` es la tercera parte, y la que faltaba. Cuando el nombre no se
+    dijo en esta conversación sino que viene de la vez anterior, mostrarlo como
+    un hecho —"Para: Matías"— invita a leerlo por arriba y contestar que sí. El
+    caso de la familia es exactamente ese: el dato está bien puesto y mal
+    aplicado. Con la memoria de por medio se pregunta en vez de afirmar, que es
+    la diferencia entre repasar y confirmar.
+
+    No sale un mensaje aparte a propósito. El resumen se manda igual, así que
+    preguntar acá no cuesta nada; una pregunta suelta antes del resumen suma un
+    ida y vuelta a cada reserva, y con el tope diario de Twilio eso es menos de
+    la mitad de turnos posibles en un día.
     """
     lineas = ["Repasemos:", ""]
     if cliente:
-        lineas.append(f"Para: {cliente}")
+        lineas.append(f"Para: {cliente}" if not de_memoria
+                      else f"Para: {cliente} (el nombre que me diste antes)")
     lineas.append(f"Servicio: {servicio}")
     if staff:
         lineas.append(f"Con: {staff}")
-    lineas += [f"Día: {_dia_corto(dia)}", f"Hora: {hora:%H:%M}", ""]
+    lineas += [f"Día: {_dia_corto(dia)}", f"Hora: {hora:%H:%M}"]
+    # La seña se avisa ACÁ, antes de confirmar, y no cuando llega el link.
+    #
+    # Es lo que hace la web: abre el modal del depósito antes de crear nada. Que
+    # la persona diga "sí" creyendo que reserva gratis y recién ahí le aparezca
+    # un cobro es la forma más rápida de perderla —y con razón: aceptó otra cosa.
+    if senia:
+        lineas.append(f"Seña: {_plata(senia)} (se paga ahora, por Mercado Pago)")
+    lineas.append("")
 
-    if cliente:
+    if cliente and de_memoria:
+        lineas.append(f"¿Va a nombre de {cliente}? Respondé SÍ.")
+        lineas.append("Si el turno es para otra persona, escribime su nombre.")
+    elif cliente:
         lineas.append("¿Confirmo? Respondé SÍ.")
         lineas.append("Si el turno es para otra persona, escribime su nombre.")
     else:
@@ -326,6 +351,107 @@ def resumen(servicio: str, staff: str | None, dia: date, hora,
 
 def pedir_nombre() -> str:
     return "Para cerrarlo necesito tu nombre y apellido."
+
+
+def pedir_senia(monto: int, link: str, minutos: int | None) -> str:
+    """El turno quedó apartado y falta pagar la seña. Con el link.
+
+    TRES COSAS, EN ESTE ORDEN
+    Primero que el turno NO está confirmado todavía, porque es lo que la persona
+    va a asumir mal si no se lo decimos: el mensaje anterior fue un resumen y el
+    siguiente trae un link, y entre esas dos cosas es fácil leer "listo".
+    Después el monto y el link. Y al final el reloj.
+
+    El plazo va último y no primero a propósito: arrancar con "tenés 15 minutos"
+    convierte un trámite en una carrera antes de que la persona sepa siquiera
+    cuánto tiene que pagar. Pero va, porque el horario se libera solo y
+    enterarse cuando ya se liberó es peor que cualquier apuro.
+
+    Si no sabemos el plazo no se inventa ninguno: se dice que es por un rato. Un
+    número equivocado acá es peor que ninguno — significa que alguien deja de
+    apurarse creyendo que le quedan diez minutos que no tiene.
+    """
+    cuanto = (f"Te lo aparto {minutos} minutos" if minutos
+              else "Te lo aparto un rato")
+    return "\n".join([
+        f"Te falta pagar la seña de {_plata(monto)} para confirmarlo.",
+        "",
+        link,
+        "",
+        f"{cuanto}. Si no llega el pago, el horario se libera y lo puede tomar "
+        "otra persona.",
+    ])
+
+
+def senia_confirmada(servicio: str, staff: str | None, dia: date, hora,
+                     codigo: str) -> str:
+    """Entró el pago: recién ahora el turno es suyo.
+
+    Es un mensaje aparte y no una variante del de arriba porque llega SOLO, sin
+    que la persona escriba nada: pagó en Mercado Pago, cerró la pestaña, y lo
+    último que le dijo el bot fue "te falta pagar". Sin esto se queda sin saber
+    si el turno salió, y el que duda vuelve a reservar o llama al local.
+    """
+    return "\n".join([
+        "¡Listo! Entró el pago y el turno quedó confirmado.",
+        "",
+        f"{servicio}" + (f" con {staff}" if staff else ""),
+        f"{_dia_corto(dia)} a las {hora:%H:%M}",
+        f"Código: {codigo}",
+    ])
+
+
+def falta_pagar() -> str:
+    """Escribió mientras esperamos la seña, sin decir nada nuevo.
+
+    Se le recuerda lo único que falta, en una línea. La alternativa era volver a
+    mandarle el link entero, que a esa altura ya lo tiene arriba en el chat.
+    """
+    return ("Sigo esperando el pago de la seña para confirmarte el turno. "
+            "El link te lo mandé recién acá arriba.")
+
+
+def senia_vencida() -> str:
+    """Se acabó el plazo y no llegó el pago.
+
+    Se avisa aunque sea una mala noticia: el horario se liberó y la persona no
+    tiene forma de saberlo. Enterarse el día del turno, en la puerta del local,
+    es la única variante peor.
+
+    Y se ofrece volver a empezar en la misma línea, porque casi siempre el que
+    no llegó a pagar sigue queriendo el turno.
+    """
+    return "\n".join([
+        "Se venció el tiempo para pagar la seña, así que solté el horario.",
+        "",
+        "Si todavía lo querés, escribime y lo buscamos de nuevo.",
+    ])
+
+
+def no_se_pudo_cobrar(url: str | None) -> str:
+    """El servicio pide seña y no se pudo generar el link de pago.
+
+    NO se promete el turno. El servicio se seña porque el negocio decidió que
+    sin garantía no lo da, así que darlo igual por WhatsApp sería usar el canal
+    para saltear una regla del negocio — que es exactamente lo que este arreglo
+    vino a cerrar.
+
+    El horario que se había apartado se libera solo: la reserva quedó esperando
+    un pago que no va a llegar y su retención vence. No hay nada que cancelar a
+    mano.
+
+    Se manda a la web, donde el mismo cobro sí funciona, y si no hay link
+    configurado queda la persona. Nunca "probá más tarde": el problema es del
+    lado del negocio y no se arregla esperando.
+    """
+    lineas = ["No pude generar el link para cobrar la seña, así que no te dejo "
+              "el turno tomado."]
+    if url:
+        lineas += ["", f"Podés sacarlo desde acá, que ahí sí se puede pagar: {url}",
+                   "", "O escribime «una persona» y te lo resuelven del local."]
+    else:
+        lineas += ["", "Escribime «una persona» y te lo resuelven del local."]
+    return "\n".join(lineas)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -341,8 +467,11 @@ def confirmado(servicio: str, staff: str | None, dia: date, hora, codigo: str) -
         f"{_dia_corto(dia)} a las {hora:%H:%M}",
         f"Código: {codigo}",
         "",
-        "Si necesitás cancelar, avisame con tiempo.",
-        "Y si querés hablar con alguien del local, escribime «hablar con una persona».",
+        # NO decir "avisame y lo cancelo": el bot no puede cancelar turnos, y
+        # prometerlo acá es lo que hacía que la persona escribiera "cancelar",
+        # leyera que estaba hecho, y no fuera. Se nombra la vía que sí existe.
+        "Si necesitás cancelar o cambiarlo, escribime «una persona»",
+        "y te lo resuelven del local.",
     ])
 
 
@@ -472,6 +601,82 @@ def link_web(nombre_negocio: str, url: str | None) -> str:
     ])
 
 
+def demorado(nombre_negocio: str, url: str | None) -> str:
+    """Cuando la respuesta está tardando y todavía se está trabajando en ella.
+
+    A los diez segundos alguien deja de esperar y empieza a preguntarse si esto
+    anda. Es el límite que Nielsen fija para mantener la atención en un diálogo:
+    pasado eso hay que decir qué está pasando, y no basta con seguir callado.
+
+    Este mensaje NO cancela nada: la respuesta de verdad sigue viniendo y llega
+    igual. Es una señal de vida con dos salidas por si la persona no quiere
+    esperar, y las dos son cosas que ya puede hacer sola.
+
+    El link va primero y la persona segunda, en ese orden a propósito: el que
+    tiene apuro resuelve solo en la web, y el que tiene una duda que el bot no
+    supo contestar necesita a alguien. Si no hay URL configurada no se inventa
+    ninguna —un link roto es peor que ninguno, misma regla que `link_web`— y
+    queda sólo la salida humana.
+
+    Sale un mensaje de más, y eso cuesta: el cupo de Twilio es finito. Por eso
+    se manda sólo cuando la demora ya ocurrió, y no como aviso preventivo en
+    cada consulta.
+    """
+    lineas = ["Perdón, esto me está tardando más de lo normal.",
+              "Seguí tranquilo que lo estoy resolviendo, pero si tenés apuro:"]
+    if url:
+        lineas += ["", f"Sacá el turno vos mismo acá: {url}",
+                   "", "O escribime «una persona» y te contesta alguien del local."]
+    else:
+        # Sin link queda una sola salida, así que la frase no puede empezar con
+        # "O": una alternativa a nada se lee como si faltara algo.
+        lineas += ["", "Escribime «una persona» y te contesta alguien del local."]
+    return "\n".join(lineas)
+
+
+def no_pudo_contestar(nombre_negocio: str, url: str | None) -> str:
+    """Cuando se agotó el tiempo y ya no va a haber respuesta.
+
+    Antes decía "¿me lo mandás de nuevo?", que le devuelve el trabajo a la
+    persona: reintentar contra algo que acaba de fallar es lo que menos ganas
+    tiene de hacer, y encima probablemente vuelva a fallar. Un mensaje de error
+    que no ofrece una salida es un callejón.
+    """
+    lineas = ["Perdón, no pude procesar tu mensaje a tiempo."]
+    if url:
+        lineas += ["", f"Podés sacar el turno acá: {url}",
+                   "", "O escribime «una persona» y te contesta alguien del local."]
+    else:
+        lineas += ["", "Escribime «una persona» y te contesta alguien del local."]
+    return "\n".join(lineas)
+
+
+def solo_adjunto(tipo: str = "") -> str:
+    """Llegó un audio, una foto o un sticker y nada de texto.
+
+    Antes esto no llegaba a ninguna plantilla: el webhook lo rechazaba con 422
+    y la persona no recibía NADA. Alguien mandaba una nota de voz pidiendo
+    turno y le hablaba a una pared, sin enterarse nunca.
+
+    El mensaje nombra lo que mandó en vez de decir "no entendí": la diferencia
+    entre "no puedo escuchar audios" y "no entendí" es que la primera explica
+    por qué y la segunda parece que la persona se explicó mal.
+    """
+    if tipo.startswith("audio"):
+        que = "Todavía no puedo escuchar audios"
+    elif tipo.startswith("image"):
+        que = "Todavía no puedo ver imágenes"
+    elif tipo.startswith("video"):
+        que = "Todavía no puedo ver videos"
+    else:
+        que = "Todavía no puedo abrir archivos"
+    return "\n".join([
+        f"{que}. ¿Me lo escribís?",
+        "",
+        "Si preferís, escribime «una persona» y te contesta alguien del local.",
+    ])
+
+
 def hablar_con_persona(nombre_negocio: str, contacto) -> str:
     """La salida de emergencia. Disponible en cualquier punto del flujo.
 
@@ -504,7 +709,139 @@ def hablar_con_persona(nombre_negocio: str, contacto) -> str:
     return "\n".join(lineas)
 
 
+def no_reservo() -> str:
+    """El "no" delante del resumen. Lo primero es decir que NO se reservó nada.
+
+    Va en la primera línea y no en la última a propósito: quien contesta que no
+    está en el momento de mayor riesgo del flujo —el mensaje anterior decía
+    «¿Confirmo?»— y lo que necesita saber es que el turno no salió. Todo lo
+    demás puede esperar un renglón.
+
+    Después ofrece qué cambiar con las palabras exactas que reconocen los
+    atajos de `estados.py`, para que la respuesta siguiente tampoco dependa del
+    clasificador. Nada de lo elegido se borra: la misma regla que el botón
+    atrás.
+    """
+    return "\n".join([
+        "Listo, no reservé nada.",
+        "",
+        "¿Qué querés cambiar? Escribime «el día», «el horario» o «el servicio».",
+        "",
+        "Si preferís dejarlo acá, escribime «cancelar».",
+    ])
+
+
+def de_nada() -> str:
+    """Un gracias o un saludo después de reservar. No es un pedido nuevo.
+
+    Antes esto caía en la apertura: la persona escribía «gracias» y recibía el
+    saludo completo con la lista de servicios y un «¿querés sacar un turno?»,
+    o sea una pregunta que no hizo, justo después de la que sí. Cerrar también
+    es parte de atender.
+    """
+    return "De nada. Cualquier cosa escribime y lo vemos."
+
+
+def atascado(url: str | None) -> str:
+    """Varios mensajes sin entenderse, y sin que la conversación haya avanzado.
+
+    Es el callejón que dejaba abierto el límite de reintentos: escalar a una
+    persona exige que la conversación haya avanzado —si no, cualquiera le hace
+    sonar el teléfono al dueño con dos mensajes de basura—, así que quien nunca
+    eligió nada giraba sobre el mismo pedido para siempre.
+
+    La salida son las dos puertas que puede abrir sola, SIN avisarle al
+    negocio: el link y la posibilidad de pedir una persona con todas las
+    letras. Pedirlo explícitamente sí escala, y ahí el aviso está justificado
+    porque lo pidió alguien y no lo disparó un contador.
+    """
+    lineas = ["Me parece que no nos estamos entendiendo, y no te quiero hacer "
+              "perder el tiempo."]
+    if url:
+        lineas += ["", f"Podés sacar el turno vos mismo acá: {url}",
+                   "", "O escribime «una persona» y te contesta alguien del local."]
+    else:
+        lineas += ["", "Escribime «una persona» y te contesta alguien del local."]
+    return "\n".join(lineas)
+
+
+def sesion_reiniciada(apertura_: str) -> str:
+    """Pasó demasiado tiempo desde el último mensaje: se arranca de nuevo.
+
+    Sin esto, una conversación abandonada a mitad quedaba congelada en su paso
+    para siempre. Alguien que llegó al resumen, se fue, y vuelve tres semanas
+    después con un «dale» estaba confirmando la fecha que había elegido
+    entonces — que ya pasó.
+
+    Se avisa en vez de reiniciar en silencio: quien vuelve después de un rato
+    se acuerda de que había quedado a mitad, y un bot que hace como si nada
+    lo obliga a adivinar qué se guardó y qué no.
+    """
+    return "\n".join([
+        "Pasó un rato desde tu último mensaje, así que arranco de nuevo para no "
+        "reservarte algo viejo.",
+        "",
+        apertura_,
+    ])
+
+
+def solo_ubicacion() -> str:
+    """Llegó una ubicación compartida y nada de texto.
+
+    Twilio manda las ubicaciones SIN adjunto (`NumMedia=0`), así que no caían
+    en la rama de los audios y las fotos: el mensaje quedaba sin texto, el
+    webhook lo rechazaba con 400 y la persona no recibía nada. El mismo
+    silencio que ya había pasado con las notas de voz.
+
+    Compartir la ubicación es lo que hace mucha gente cuando quiere saber
+    dónde queda el local, así que la respuesta ofrece justo eso.
+    """
+    return "\n".join([
+        "Me llegó tu ubicación, pero todavía no la puedo usar. ¿Me escribís qué "
+        "necesitás?",
+        "",
+        "Si querés saber dónde queda el local, preguntame «¿dónde quedan?».",
+    ])
+
+
+def demasiados_mensajes() -> str:
+    """Se pasó del tope de mensajes por minuto.
+
+    Sale UNA vez por ventana, no por cada mensaje rechazado: si contestara
+    todos, el límite no protegería nada —seguiría saliendo un mensaje de Twilio
+    por cada uno— que es justo el gasto que vino a frenar.
+
+    Y no acusa a nadie. Casi siempre no es un ataque: es alguien apurado
+    escribiendo de a una palabra por mensaje. El único que va a leer esto en su
+    teléfono es esa persona; quien esté golpeando la puerta con un script no lo
+    lee.
+    """
+    return "\n".join([
+        "Pará un toque que no llego a leerte 🙂",
+        "",
+        "Escribime todo junto en un mensaje y lo vemos.",
+    ])
+
+
+def sin_texto() -> str:
+    """Llegó un mensaje sin nada legible y sin adjunto que explique qué era.
+
+    Existe para que NINGÚN mensaje entrante quede sin respuesta. Antes, todo lo
+    que no fuera texto ni adjunto conocido terminaba en un 400 —o sea, en
+    silencio—, y el silencio se lee como "no me dieron bola", nunca como "no me
+    entendió".
+    """
+    return "No me llegó ningún texto. ¿Me lo escribís?"
+
+
 def fuera_de_alcance() -> str:
+    """Sin usos hoy. Se conserva porque nombra un caso que va a volver.
+
+    Es la respuesta para "no sé HACER eso" —cancelar, reprogramar, cobrar la
+    seña—, distinta de `sin_dato()`, que es "no TENGO ese dato". Mezclarlas fue
+    un bug real: a "¿tienen estacionamiento?" contestaba "eso no lo puedo hacer
+    por acá", que suena a que la pregunta estuvo mal hecha.
+    """
     return (
         "Eso todavía no lo puedo hacer por acá. "
         "Puedo darte información y sacarte un turno."
@@ -563,9 +900,38 @@ def respuesta_info(texto: str) -> str:
 
 
 def cancelado() -> str:
-    # "Cuando quieras arrancamos de nuevo" suena bien y no sirve: no dice qué
-    # escribir. Alguien que canceló y quiere volver a empezar se queda mirando
-    # la pantalla sin saber si tiene que decir algo o esperar. La palabra
-    # exacta cuesta lo mismo.
-    return ("Listo, cancelé la reserva.\n\n"
+    """Se abandona el pedido que se estaba armando. NO cancela ningún turno.
+
+    Decía "Listo, cancelé la reserva", y era mentira en el caso que importa.
+    Esta intención sólo limpia lo que la persona venía eligiendo: no toca la
+    agenda de aturno ni un turno ya confirmado. Alguien que escribía "cancelar"
+    pensando en el turno del jueves leía que estaba cancelado, no iba, y el
+    lugar le seguía ocupado al negocio. Los dos se enteraban en el mostrador.
+
+    Ahora dice lo que de verdad pasó. Para el turno ya confirmado está
+    `no_puedo_cancelar`, y el flujo elige según haya algo en curso o no.
+
+    "Cuando quieras arrancamos de nuevo" suena bien y no sirve: no dice qué
+    escribir. La palabra exacta cuesta lo mismo.
+    """
+    return ("Listo, dejamos el pedido acá. No llegué a reservarte nada.\n\n"
             "Escribime «hola» cuando quieras empezar de nuevo.")
+
+
+def no_puedo_cancelar(url: str | None) -> str:
+    """Pidió cancelar y no hay nada en curso: habla de un turno ya confirmado.
+
+    El bot NO puede cancelarlo: no existe ese camino contra aturno. Lo único
+    honesto es decirlo y pasar a alguien que sí pueda. Prometer que se encarga
+    es exactamente el daño que este mensaje viene a reparar.
+
+    Tampoco se ofrece el código como salida: aturno lo emite, pero hoy no hay
+    ninguna página donde canjearlo, así que mandarlo a "usar tu código" sería
+    otra promesa vacía.
+    """
+    lineas = ["Los turnos ya confirmados no los puedo cancelar yo.",
+              "",
+              "Escribime «una persona» y te lo cancelan del local."]
+    if url:
+        lineas += ["", f"Tus turnos también los ves acá: {url}"]
+    return "\n".join(lineas)

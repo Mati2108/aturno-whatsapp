@@ -1,56 +1,17 @@
 # Aturno
 
-Conocimiento que el bot puede citar sobre este negocio. Se arma respondiendo
-`datos/CUESTIONARIO.md`.
+Lo que el asistente puede contestar sobre este negocio. Se carga desde el
+panel, en Asistente de WhatsApp → Qué contesta.
 
-Las secciones de abajo salen de datos verificados contra la API de aturno el
-17/08/2026. Lo que el cuestionario pregunta y todavía nadie respondió
-—estacionamiento, medios de pago, tolerancia de llegada tarde, qué traer— **no
-figura acá a propósito**. Mientras falte, el bot dice que no lo tiene cargado
-en vez de inventarlo.
+Lo que no está acá, el asistente dice que no lo tiene cargado en vez de
+inventarlo.
 
-## Horarios de atención
+## Cómo llegar
 
-Lunes de 9:00 a 15:30 y de 16:00 a 22:30.
-Martes de 9:00 a 18:00.
-Miércoles de 9:00 a 18:00 y de 19:45 a 22:00.
-Jueves de 9:00 a 18:00.
-Viernes cerrado.
-Sábados y domingos de 9:00 a 18:00.
+> ¿Cuál es la dirección exacta? dónde quedan dónde están en qué zona cómo llego dirección
+Roque Saenz Peña 668
 
-El último turno de cada tramo se toma con el tiempo suficiente para que la
-atención termine antes del cierre.
+## Lo que siempre preguntan
 
-## Servicios y precios
-
-- Dentista — 30 minutos — $100
-
-## Quiénes atienden
-
-Juan Demo y Matias Calo.
-
-Se puede pedir turno con una persona en particular o dejar que se asigne según
-la disponibilidad del día. Juan Demo atiende de lunes a jueves; Matias Calo,
-todos los días que el local abre.
-
-## Dónde estamos
-
-Roque Saenz Peña 668.
-
-## Cómo contactarnos
-
-Teléfono: 1130032002
-Email: matiascalo2@gmail.com
-
-## Cómo sacar y cancelar un turno
-
-El turno se saca por acá mismo, sin cuenta y sin descargar nada: elegís el
-servicio, con quién, el día y el horario.
-
-Al confirmar llega un código de reserva. Con ese código se puede consultar o
-cancelar el turno desde la página.
-
-## Reservar desde la página
-
-También se puede reservar en aturno.app/aturno, con los mismos horarios y la
-misma agenda. Por WhatsApp no hace falta entrar.
+> Escribilo como se lo contestarías a alguien por WhatsApp.
+Esta respuesta la cargó una prueba del formulario. Borrala desde el panel.

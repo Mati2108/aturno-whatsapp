@@ -76,6 +76,25 @@ class ClienteAturno(ABC):
         """
         return Contacto()
 
+    async def senia_pagada(self, business_id: str, codigo: str) -> bool | None:
+        """¿Entró ya el pago de la seña de este turno?
+
+        Tres respuestas, y las tres importan:
+
+            True   pagó: el turno es suyo y hay que avisarle
+            False  todavía no
+            None   no se pudo averiguar (la red, el endpoint, el turno)
+
+        `None` y `False` NO son lo mismo, y unificarlos costaría plata: con
+        `False` el bot le dice a la persona que se venció el plazo y que soltó
+        el horario. Decirle eso a alguien que sí pagó —sólo porque la consulta
+        falló— es sacarle un turno que ya abonó.
+
+        Vacío por defecto, como `contacto`: una implementación que no sepa
+        contestarlo sigue siendo válida y el bot simplemente no avisa.
+        """
+        return None
+
     @abstractmethod
     async def listar_servicios(self, business_id: str) -> list[Servicio]:
         """Qué vende el negocio, con duración y precio.

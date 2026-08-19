@@ -36,6 +36,56 @@ corre sin red; con `--no-limpiar` deja los turnos para mirarlos en el panel.
 
 ## 🔴 Bloquea la entrega
 
+### 0. La cuenta de Anthropic no tiene crédito
+
+`GET /diagnostico` en producción devuelve `anthropic: valida: false`. El
+clasificador falla en TODOS los mensajes y cae en `DESCONOCIDO`, así que el bot
+sólo entiende números y las frases de la tabla de atajos. Como el paso del
+nombre depende del modelo, **hoy ningún cliente nuevo puede sacar turno**: se
+traba y termina derivado a una persona.
+
+Y `/salud` dice `"ok"`: el build desplegado es anterior al chequeo
+`_llm_responde()`, así que le falta `puede_responder` y no puede detectarlo. Al
+recargar crédito, redesplegar y confirmar que ese campo aparezca.
+
+Mientras tanto, `PROVIDER=gemini` funciona (la clave de embeddings sirve para el
+chat) pero **clasifica distinto** en algunos casos medidos — está detallado al
+final de `AUDITORIA_BOT.md`.
+
+### 0c. La seña: probada contra producción, falta desplegar el backend
+
+    python probar_senia.py --real
+
+**Verificado el 18/8 contra el aturno real**, con `Dentista` marcado como
+`requiresDeposit` (50% de $100 = $50). El turno entró en `pending_deposit`, con
+su `holdExpiresAt`, su monto y un link vivo de Mercado Pago generado con el
+token del negocio. Los dos turnos de prueba quedaron cancelados.
+
+Lo que esa corrida dejó en rojo, y las dos cosas se arreglan **desplegando el
+backend de aturno** (los cambios ya están en el árbol de trabajo):
+
+1. **El bot promete 30 minutos y la retención dura 5.** `create-link` devolvía
+   `expiresAt` con `Date.now() + 30 minutos` escrito a mano — un tercer reloj,
+   distinto del que aparta el horario y del que vence la preferencia de Mercado
+   Pago. El bot lee ese campo (a propósito: para no duplicar el número) así que
+   repetía la mentira. Ahora sale de `vencimientoDeRetencion`, que además pasó
+   de 5 a 15 minutos.
+2. **`origen: 'whatsapp'` se perdía.** El bot lo manda en cada reserva y
+   `POST /api/bookings` no lo tenía en su destructure, así que se descartaba en
+   silencio: el negocio no podía medir cuántos turnos le entran por WhatsApp.
+
+Lo único que falta y no depende de un deploy: **pagar un link de verdad** y
+comprobar que el turno pase a confirmado y que el bot avise por el chat. El link
+cobra plata real —el token conectado es el de la cuenta del negocio— así que
+conviene el servicio de $100 que ya está, o credenciales de prueba.
+
+### 0b. Auditoría de bordes: 13 hallazgos, arreglados el 18/8
+
+`AUDITORIA_BOT.md` tiene el árbol de estados completo y qué pasa ante cada tipo
+de mensaje. El peor: **contestar "no" al resumen reservaba el turno igual**.
+Todo lo arreglado quedó cubierto por `test_bordes.py` (54 aserciones, ninguna
+depende del LLM).
+
 ### 1. Falta probarlo por WhatsApp de punta a punta
 
 Es lo único del camino principal que todavía no se verificó con una persona
@@ -311,20 +361,33 @@ Salieron de usarlo, no de imaginarlo.
 - **No cancela ni reprograma.** Se dejó afuera a propósito; aturno ya lo
   resuelve y un bot que hace una cosa bien vale más que uno que hace cinco a
   medias.
-- **No maneja señas.** Los servicios con depósito previo (coloración pide 30%)
-  se reservan sin cobrarlo.
-- **No cobra la seña.** El servicio Dentista tiene `requiresDeposit: true`, pero
-  el bot crea la reserva sin `depositInfo`, así que nace en `pending` —firme—
-  en vez de `pending_deposit`. O sea que **por WhatsApp se saltea la seña que
-  la web sí cobra**. Es lo primero a resolver después del camino principal:
-  toca plata.
-- **La sesión no vence.** Si alguien deja una conversación a medias y vuelve a
-  la semana, sigue en el mismo paso. Debería reiniciarse a los 30 minutos.
+- ~~**No maneja señas.**~~ Hecho (18/8). El servicio con seña ya no se confirma
+  sin pagar: el resumen avisa el monto antes de que la persona diga que sí, el
+  turno nace en `pending_deposit` —apartando el horario— y el bot manda el link
+  de Mercado Pago. Falta prender `requiresDeposit` en algún servicio real para
+  probarlo de punta a punta (ver abajo).
+- ~~**No cobra la seña.**~~ Hecho (18/8). El bot manda `depositInfo` y pide el
+  link con `POST /api/payments/mercadopago/create-link`. Si el link NO sale
+  —Mercado Pago sin conectar, token vencido, su API caída— **no promete el
+  turno**: lo dice, manda a la web, y la reserva que se creó suelta el horario
+  sola cuando vence la retención. Y cuando entra el pago, el bot avisa: consulta
+  `GET /api/bookings/by-code/:code` cada 20 segundos mientras dura la retención,
+  porque Mercado Pago le confirma a aturno y no al bot.
+
+  **OJO, para probarlo hace falta un servicio con seña.** Hoy `Dentista` está
+  con `requiresDeposit: false` y sin `depositConfig` (verificado contra
+  producción el 18/8), o sea que no hay nada que cobrar. Se prende desde el
+  panel; el bot lo lee del servicio real y no lo decide él.
+- ~~**La sesión no vence.**~~ Hecho (18/8): vence a los `SESION_MINUTOS` (30) y
+  arranca de nuevo avisando, conservando quién sos. Era peor de lo que decía
+  esta línea: volver a la semana con un "dale" confirmaba la fecha de entonces,
+  o sea un día que ya pasó.
 - **El RAG no cita la fuente.** Contesta con el fragmento pero no dice de qué
   sección salió; para el negocio sería útil saber qué parte de su documento se
   está usando.
-- **Sin límite de tasa por teléfono.** Nada impide que alguien mande cien
-  mensajes y gaste el saldo de la API.
+- ~~**Sin límite de tasa por teléfono.**~~ Hecho (18/8): 12 por minuto y por
+  teléfono, avisando una sola vez. En memoria y por proceso, así que con varias
+  instancias el tope efectivo se multiplica — para el volumen de hoy alcanza.
 
 ---
 

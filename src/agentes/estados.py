@@ -43,6 +43,10 @@ class Estado(str, Enum):
     ESPERANDO_NOMBRE = "esperando_nombre"
     ESPERANDO_CONFIRMACION = "esperando_confirmacion"
     CONFIRMADO = "confirmado"
+    # El turno existe, tiene el horario apartado, y falta que entre la seña.
+    # No está en ORDEN: no es un paso que la persona complete escribiendo — se
+    # sale de acá pagando (o dejando que venza), no contestando.
+    ESPERANDO_SENIA = "esperando_senia"
     # La conversación es del negocio, no del bot. No está en ORDEN: no es un
     # paso del formulario, es una pausa que puede pasar en cualquier momento.
     EN_MANOS_HUMANAS = "en_manos_humanas"
@@ -72,6 +76,12 @@ class Intencion(str, Enum):
     HABLAR_CON_PERSONA = "hablar_con_persona"   # la salida de emergencia
     PEDIR_LINK = "pedir_link"           # prefiere reservar desde la web
     VOLVER_AL_BOT = "volver_al_bot"     # sale de manos humanas
+    # El "no" delante del resumen. Separada de CANCELAR a propósito: no
+    # significan lo mismo. Cancelar es abandonar el pedido y perder lo elegido;
+    # esto es "algo de esto está mal, no lo reserves". Tratar el segundo como
+    # el primero le borra a la persona todo lo que venía armando por haber
+    # contestado que no a una pregunta.
+    RECHAZAR = "rechazar"
     DESCONOCIDO = "desconocido"
 
 
@@ -96,6 +106,28 @@ AVANZA_CON: dict[Estado, Intencion] = {
     Estado.ESPERANDO_NOMBRE: Intencion.DAR_NOMBRE,
     Estado.ESPERANDO_CONFIRMACION: Intencion.CONFIRMAR,
 }
+
+# Los pasos donde contestar es SEÑALAR UN RENGLÓN de una lista numerada.
+#
+# Es la condición para que "3" —o el nombre de una opción— se pueda resolver
+# contra `opciones` sin pasar por el modelo. Fuera de estos pasos, `opciones`
+# sigue existiendo (se le pasa al clasificador como contexto) pero no se indexa.
+#
+# LA DISTINCIÓN NO ES COSMÉTICA. Sin ella, el paso de confirmación —que muestra
+# `["sí", "no"]` para que el modelo sepa qué se espera— hacía que un "no" fuera
+# "el renglón 2", y todo renglón elegido se traducía a la intención que AVANZA
+# el paso. O sea: contestar QUE NO al resumen reservaba el turno, igual que
+# contestar que sí. La persona se presentaba a un turno que había rechazado y
+# el negocio perdía el horario.
+#
+# Al declararlo como una tabla y no como un `if`, un paso nuevo entra en la
+# lista sólo si de verdad se elige de una lista.
+ELIGE_DE_LISTA: frozenset[Estado] = frozenset({
+    Estado.ESPERANDO_SERVICIO,
+    Estado.ESPERANDO_STAFF,
+    Estado.ESPERANDO_DIA,
+    Estado.ESPERANDO_HORARIO,
+})
 
 
 def siguiente(actual: Estado, saltear: set[Estado] | None = None) -> Estado:
@@ -156,6 +188,25 @@ ATAJOS: dict[Estado | None, dict[frozenset[str], Intencion]] = {
                    "obvio", "claro", "de una", "vale", "correcto", "asi es",
                    "esta bien", "si por favor", "si porfa", "genial", "buenisimo"}):
             Intencion.CONFIRMAR,
+        # El "no" tiene que ser tan barato y tan exacto como el "sí". La
+        # plantilla del resumen dice literalmente «Respondé SÍ o NO», así que
+        # es la respuesta más previsible del flujo: mandarla al modelo sería
+        # pagar por la mitad de las respuestas a una pregunta de dos.
+        frozenset({"no", "nop", "nope", "no no", "todavia no", "aun no",
+                   "esta mal", "no esta bien", "no es asi", "asi no",
+                   "no confirmes", "no reserves", "pera", "esperá", "espera",
+                   "no gracias", "mejor no"}):
+            Intencion.RECHAZAR,
+        # Qué querés cambiar, después del "no". Van acá y no al modelo por lo
+        # mismo: son las tres respuestas posibles a una pregunta que hace el
+        # bot, y tienen que funcionar aunque el clasificador esté caído.
+        frozenset({"el dia", "la fecha", "otro dia", "cambiar el dia",
+                   "el día", "cambiar la fecha"}): Intencion.ELEGIR_DIA,
+        frozenset({"el horario", "la hora", "otro horario", "otra hora",
+                   "cambiar el horario", "cambiar la hora"}):
+            Intencion.ELEGIR_HORARIO,
+        frozenset({"el servicio", "otro servicio", "cambiar el servicio"}):
+            Intencion.ELEGIR_SERVICIO,
     },
     Estado.ESPERANDO_STAFF: {
         frozenset({"me da igual", "da igual", "cualquiera", "el que sea",
@@ -211,6 +262,70 @@ def respuesta_fija(texto: str, estado: Estado) -> tuple[Intencion, dict] | None:
                              if intencion == Intencion.ELEGIR_STAFF else {})
                 return intencion, entidades
     return None
+
+
+# Pedir cambiar algo ya elegido: "mejor cambio el servicio", "otro día".
+#
+# No entra en la tabla `ATAJOS` porque esa compara frases EXACTAS, y acá la
+# variedad es el problema: "mejor cambio de servicio", "quiero otro servicio",
+# "cambiame el servicio" y "mejor otro servicio" son la misma cosa dicha de
+# cuatro formas, y ninguna lista cerrada las junta a todas.
+#
+# La regla pide DOS cosas a la vez —qué cambiar y una palabra de cambio— y por
+# eso no se dispara sola: "quiero el servicio de coloración" nombra el servicio
+# pero no pide cambiarlo, y no matchea.
+#
+# Existe porque acá el modelo se equivoca de una forma cara: leyendo "mejor
+# cambio de servicio" como un "volver" genérico, que retrocede UN paso. Quien
+# pidió cambiar el servicio estando en el día termina eligiendo profesional, y
+# tiene que volver a pedirlo. Medido con Gemini; con Claude salía bien, o sea
+# que además el comportamiento dependía del proveedor.
+_QUE_CAMBIAR = (
+    (("servicio",), Intencion.ELEGIR_SERVICIO),
+    (("horario", "hora"), Intencion.ELEGIR_HORARIO),
+    (("dia", "fecha"), Intencion.ELEGIR_DIA),
+    (("profesional", "persona que", "con quien"), Intencion.ELEGIR_STAFF),
+)
+_PALABRAS_DE_CAMBIO = ("cambio", "cambiar", "cambiame", "cambia", "otro", "otra",
+                       "mejor", "distinto", "distinta")
+
+
+def pedido_de_cambio(texto: str) -> Intencion | None:
+    """¿Está pidiendo cambiar algo que ya eligió? Sin LLM.
+
+    Devuelve la intención del paso que quiere rehacer, o `None`. El flujo ya
+    sabe qué hacer con eso: si el paso es anterior al actual, retrocede y limpia
+    lo que dejó de valer.
+
+    El orden de `_QUE_CAMBIAR` importa: "horario" se prueba antes que "dia"
+    porque "cambiar el horario del día" nombra los dos y lo que se quiere
+    cambiar es el horario.
+    """
+    limpio = _normalizar(texto)
+    if not limpio or len(limpio) > 40:
+        return None
+    if not any(p in limpio.split() for p in _PALABRAS_DE_CAMBIO):
+        return None
+    for palabras, intencion in _QUE_CAMBIAR:
+        if any(p in limpio for p in palabras):
+            return intencion
+    return None
+
+
+def sin_contenido(texto: str) -> bool:
+    """¿El mensaje no tiene ninguna letra ni número que se pueda interpretar?
+
+    Un "👋", un "..." o tres espacios en blanco. Hasta acá iban al clasificador
+    —cuestan una llamada entera, ~1.677 tokens de entrada— para que devolviera
+    lo único que puede devolver ante algo sin palabras: DESCONOCIDO. Se paga
+    por una respuesta que ya se conoce antes de preguntar.
+
+    Es la misma regla que ya aplica el webhook con los audios y las fotos: si
+    no hay nada que leer, se contesta fijo y no se gasta modelo. La diferencia
+    con `_normalizar` es que acá alcanza con mirar si sobrevive UN carácter
+    alfanumérico, sin importar cuál.
+    """
+    return not any(c.isalnum() for c in unicodedata.normalize("NFKD", texto or ""))
 
 
 def _como_hora(texto: str) -> str | None:
@@ -337,6 +452,17 @@ def opcion_por_nombre(texto: str, opciones: list[str]) -> int | None:
         if len(contienen) == 1:
             return contienen[0]
     return None
+
+
+def es_numero_suelto(texto: str) -> bool:
+    """¿El mensaje es sólo un número, sin nada más? ("3", "el 3", "opción 3")
+
+    Se usa donde NO hay lista numerada en pantalla, y ahí un número no señala
+    nada: es alguien contestando la pantalla anterior, que sí la tenía. En el
+    resumen eso importa más que en ningún otro paso, porque el mensaje anterior
+    fue una lista de horarios y el siguiente movimiento reserva.
+    """
+    return numero_elegido(texto, 10 ** 9) is not None
 
 
 def numero_elegido(texto: str, cantidad: int) -> int | None:

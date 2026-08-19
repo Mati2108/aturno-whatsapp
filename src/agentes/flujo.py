@@ -39,6 +39,7 @@ from src import plantillas as P
 from src.agentes.clasificador import Clasificacion, clasificar, construir_clasificador
 from src.agentes.estados import (
     AVANZA_CON,
+    ELIGE_DE_LISTA,
     ORDEN,
     Estado,
     Intencion,
@@ -46,8 +47,11 @@ from src.agentes.estados import (
     afirmacion_sobre_lo_unico,
     numero_elegido,
     opcion_por_nombre,
+    es_numero_suelto,
+    pedido_de_cambio,
     respuesta_fija,
     siguiente,
+    sin_contenido,
 )
 from src.aturno.base import ClienteAturno
 # Alias a propósito: los nodos de LangGraph reciben un parámetro llamado
@@ -85,6 +89,19 @@ MAX_MENSAJE = 400
 # Cuántos mensajes seguidos sin entender antes de ofrecer una persona. Dos y
 # no tres: al tercer "no te entendí" idéntico, la gente ya se fue.
 LIMITE_SIN_ENTENDER = 2
+
+# Y cuántos antes de ofrecerle una salida a quien NUNCA eligió nada.
+#
+# Escalar exige que la conversación haya avanzado (ver `_hubo_avance`): sin esa
+# condición, dos mensajes de basura desde cualquier número le hacen sonar el
+# teléfono al dueño. Pero el que no avanzó tampoco puede quedar girando sobre
+# el mismo pedido para siempre, que es lo que pasaba: el contador subía a 2,
+# volvía a 0 y arrancaba de nuevo, sin que nada cambiara nunca.
+#
+# Más alto que el otro a propósito. Acá no se avisa a nadie: se ofrecen las dos
+# puertas que la persona puede abrir sola —el link y pedir una persona con
+# todas las letras—, así que equivocarse cuesta un mensaje, no una molestia.
+LIMITE_ATASCADO = 4
 
 # Cuánto puede errarle alguien a un horario y que siga siendo un tipeo.
 #
@@ -138,7 +155,25 @@ class Conversacion(TypedDict):
     profesional_id: NotRequired[str | None]
     fecha: NotRequired[str | None]    # ISO
     hora: NotRequired[str | None]     # HH:MM
+
+    # DOS nombres, y confundirlos fue un bug real.
+    #
+    # `nombre` es QUIÉN SOS: lo que contestaste cuando el bot preguntó cómo te
+    # llamás. Persiste entre conversaciones y es lo que hace que la segunda vez
+    # no te lo vuelva a preguntar.
+    #
+    # `nombre_del_turno` es A NOMBRE DE QUIÉN va ESTA reserva, y sólo aparece
+    # cuando es distinto del contacto: alguien saca un turno para su hija y lo
+    # corrige en el resumen. Es de una reserva, no de la persona, así que se
+    # limpia al reservar.
+    #
+    # Estaban unificados. El "nombre recordado" se leía del estado guardado
+    # —`previo.values["nombre"]`— así que corregir el nombre en la confirmación
+    # para reservarle a otro te reescribía la identidad: a partir de ahí el bot
+    # te saludaba con el nombre de tu hija y le ponía ese nombre a todos tus
+    # turnos siguientes, sin que nada lo mostrara.
     nombre: NotRequired[str | None]
+    nombre_del_turno: NotRequired[str | None]
 
     # Las opciones que se mostraron en el último mensaje. Sin esto no se puede
     # resolver "3": hay que saber contra qué lista.
@@ -153,6 +188,18 @@ class Conversacion(TypedDict):
     # Cuántos mensajes seguidos no se entendieron. Se resetea con cualquier
     # mensaje que sí avance o que el clasificador reconozca.
     sin_entender: NotRequired[int]
+
+    # Cuándo fue el último mensaje de esta conversación, en ISO. Es lo único
+    # que hace falta para que la sesión pueda vencer: sin esto, quien llegó al
+    # resumen y volvió tres semanas después seguía parado en el mismo paso, y
+    # un "dale" confirmaba la fecha de entonces — que ya pasó.
+    ultimo_en: NotRequired[str | None]
+
+    # El código del turno que está esperando la seña. Con esto el webhook puede
+    # preguntarle a aturno si el pago entró, que es la única forma de avisarle a
+    # la persona: paga en Mercado Pago, cierra la pestaña, y del lado del chat
+    # lo último que leyó fue "te falta pagar".
+    codigo_pendiente: NotRequired[str | None]
 
     # Cuando la conversación pasa al negocio: en qué paso estaba y desde cuándo
     # está esperando. Sin el paso previo, volver del modo humano tiraría a la
@@ -174,6 +221,9 @@ class Conversacion(TypedDict):
     # a la clase de hoy. Si el esquema cambia, las sesiones viejas se rompen.
     _plantilla: NotRequired[str | None]
     _datos: NotRequired[dict | None]
+    # Si este mensaje llegó después del vencimiento de la sesión. Lo calcula
+    # `entender`, que es el único nodo que todavía ve el sello anterior.
+    _vencida: NotRequired[bool]
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -188,25 +238,63 @@ async def entender(conv: Conversacion, config) -> dict:
 
     # Lo efímero del turno anterior no puede sobrevivir: si no, la plantilla
     # de confirmación se repetiría en el mensaje siguiente.
-    limpio_turno = {"_plantilla": None, "_datos": None}
+    #
+    # `_vencida` se calcula ACÁ y no en `avanzar` porque acá todavía se puede
+    # leer el sello del mensaje ANTERIOR: los nodos corren en orden sobre el
+    # mismo estado, así que para cuando `avanzar` mirara `ultimo_en` ya sería
+    # el de este mensaje y la resta daría cero siempre.
+    limpio_turno = {
+        "_plantilla": None,
+        "_datos": None,
+        "_vencida": _sesion_vencida(conv.get("ultimo_en")),
+        "ultimo_en": ahora().isoformat(),
+    }
+
+    # Sin una sola letra ni número no hay nada que clasificar: un "👋", un
+    # "..." o tres espacios en blanco. El modelo sólo puede devolver
+    # DESCONOCIDO —que ya se sabe antes de preguntar— y cobra la llamada igual.
+    if sin_contenido(texto):
+        logger.info("sin contenido «%s» → desconocido (sin LLM)", texto[:24])
+        return {**limpio_turno, "intent": Intencion.DESCONOCIDO.value, "entidades": {}}
 
     # Por número o por nombre: las dos cosas valen. La lista está en pantalla,
     # así que "2" y "Matias Calo" señalan lo mismo y ninguno necesita al modelo.
-    indice = numero_elegido(texto, len(opciones))
-    como = "número"
-    if indice is None:
-        indice = opcion_por_nombre(texto, opciones)
-        como = "nombre"
-    if indice is None:
-        indice = afirmacion_sobre_lo_unico(texto, opciones)
-        como = "sí"
-    if indice is not None:
-        logger.info("%s «%s» → %s (sin LLM)", como, texto[:24], opciones[indice])
-        return {
-            **limpio_turno,
-            "intent": (AVANZA_CON.get(estado) or Intencion.DESCONOCIDO).value,
-            "entidades": {"_indice": indice},
-        }
+    #
+    # SÓLO en los pasos donde contestar es señalar un renglón (`ELIGE_DE_LISTA`).
+    # Fuera de ellos `opciones` viaja igual al clasificador como contexto, pero
+    # no se indexa: en el paso de confirmación las opciones son "sí" y "no", y
+    # tratarlas como renglones convertía al "no" —el renglón 2— en la intención
+    # que AVANZA el paso, o sea en un turno reservado contra lo que la persona
+    # acababa de contestar. Está contado en el comentario de `ELIGE_DE_LISTA`.
+    if estado in ELIGE_DE_LISTA:
+        indice = numero_elegido(texto, len(opciones))
+        como = "número"
+        if indice is None:
+            indice = opcion_por_nombre(texto, opciones)
+            como = "nombre"
+        if indice is None:
+            indice = afirmacion_sobre_lo_unico(texto, opciones)
+            como = "sí"
+        if indice is not None:
+            logger.info("%s «%s» → %s (sin LLM)", como, texto[:24], opciones[indice])
+            return {
+                **limpio_turno,
+                "intent": (AVANZA_CON.get(estado) or Intencion.DESCONOCIDO).value,
+                "entidades": {"_indice": indice},
+            }
+
+    # En el resumen no hay ninguna lista numerada, así que un número suelto no
+    # señala nada: es alguien contestando la pantalla ANTERIOR, que sí la
+    # tenía. Se pregunta de nuevo en vez de interpretarlo, y sin gastar modelo.
+    #
+    # Es el único paso donde vale la pena esta guarda, porque es el único donde
+    # el movimiento siguiente es irreversible: confirmar crea el turno. Un
+    # mensaje de más cuesta un mensaje; un turno que la persona no pidió le
+    # cuesta el lugar al negocio y un viaje al cliente. La misma regla que ya
+    # aplica `opcion_por_nombre` con los nombres ambiguos.
+    if estado == Estado.ESPERANDO_CONFIRMACION and es_numero_suelto(texto):
+        logger.info("número suelto «%s» en el resumen: no lo interpreto", texto[:16])
+        return {**limpio_turno, "intent": Intencion.DESCONOCIDO.value, "entidades": {}}
 
     # Las frases de siempre ("dale", "me da igual", "hablar con alguien") no
     # necesitan al modelo: significan lo mismo todas las veces. Cada una que se
@@ -217,6 +305,15 @@ async def entender(conv: Conversacion, config) -> dict:
         intencion, entidades = fija
         logger.info("«%s» → %s (frase fija, sin LLM)", texto[:24], intencion.value)
         return {**limpio_turno, "intent": intencion.value, "entidades": entidades}
+
+    # "Mejor cambio el servicio" es un pedido concreto, no un "volver" genérico.
+    # Se resuelve acá porque el modelo lo leía como VOLVER —que retrocede un
+    # solo paso— y la persona terminaba eligiendo profesional cuando lo que
+    # quería era otro servicio.
+    cambio = pedido_de_cambio(texto)
+    if cambio is not None:
+        logger.info("«%s» → %s (pedido de cambio, sin LLM)", texto[:24], cambio.value)
+        return {**limpio_turno, "intent": cambio.value, "entidades": {}}
 
     cfg = (config.get("configurable") or {})
     hoy = hoy_del_negocio()
@@ -281,22 +378,91 @@ async def avanzar(conv: Conversacion, config) -> dict:
     if intent == Intencion.PEDIR_LINK:
         return {"_plantilla": "link"}
 
+    # ---- La sesión venció: se arranca de nuevo, no se sigue donde estaba ----
+    #
+    # Va después de la salida de emergencia y antes de todo lo que decide sobre
+    # datos guardados, porque de eso se trata: los datos guardados ya no valen.
+    # Una fecha elegida hace tres semanas no es una fecha, es un turno para un
+    # día que pasó — y el paso siguiente era confirmarla.
+    #
+    # NO alcanza el estado de manos humanas (tiene su propio reloj, más corto,
+    # arriba) ni CONFIRMADO (ahí no hay nada a medias que se pueda pudrir: el
+    # turno ya salió y el mensaje siguiente empieza un pedido nuevo igual).
+    #
+    # Se conserva `nombre`: quién sos no vence. Lo que vence es lo que elegiste.
+    if conv.get("_vencida") and estado not in (Estado.APERTURA, Estado.CONFIRMADO):
+        logger.info("sesión vencida en %s: arranco de nuevo", estado.value)
+        return {**await _abrir(saltear, negocio),
+                "servicio_id": None, "profesional_id": None,
+                "fecha": None, "hora": None, "nombre_del_turno": None,
+                "opciones": [], "desde_horario": 0, "sin_entender": 0,
+                "_plantilla": "sesion_reiniciada"}
+
+    # Un gracias o un saludo después de reservar es un cierre, no un pedido
+    # nuevo. Sin esta rama caía en la apertura de más abajo y la persona
+    # recibía el saludo entero con la lista de servicios y un "¿querés sacar un
+    # turno?", que es contestarle algo que no preguntó justo después de haberle
+    # contestado lo que sí.
+    if estado == Estado.CONFIRMADO and intent == Intencion.SALUDO:
+        return {"_plantilla": "de_nada"}
+
+    # Esperando la seña, un saludo tampoco reinicia nada: se le recuerda que
+    # falta pagar, que es lo único pendiente. Sin esto, un "hola" mientras
+    # busca la tarjeta le tiraba la lista de servicios encima del link.
+    if estado == Estado.ESPERANDO_SENIA and intent == Intencion.SALUDO:
+        return {"_plantilla": "falta_pagar"}
+
     # Turno ya cerrado: el mensaje siguiente empieza un pedido nuevo. Se limpia
     # lo elegido pero NO quién es la persona — formulario nuevo, cliente
     # conocido. Es lo que espera alguien que vuelve a escribir después de
     # reservar, igual que en la web.
-    if estado == Estado.CONFIRMADO:
+    # `ESPERANDO_SENIA` entra acá por lo mismo: quien escribe otra cosa está
+    # empezando un pedido nuevo. El turno que espera el pago no se toca —sigue
+    # apartado hasta que venza— y el nuevo pedido arranca limpio.
+    if estado in (Estado.CONFIRMADO, Estado.ESPERANDO_SENIA):
         estado = Estado.APERTURA
         conv = {**conv, "estado": estado.value, "servicio_id": None,
                 "profesional_id": None, "fecha": None, "hora": None}
         cambios.update({"servicio_id": None, "profesional_id": None,
                         "fecha": None, "hora": None})
 
+    # ---- "No" delante del resumen: NO se reserva, y no se pierde nada ----
+    #
+    # Es la contracara exacta de CONFIRMAR y por eso está pegada a él, antes
+    # que cualquier otra transversal. Lo único que hace es no avanzar: el paso
+    # queda donde estaba y todo lo elegido sigue en pie, porque quien contesta
+    # que no quiere cambiar UNA cosa, no empezar de cero. Para empezar de cero
+    # está "cancelar", que es la rama de acá abajo y sí limpia.
+    #
+    # Fuera del resumen un "no" suelto no significa esto —significa que no a lo
+    # que sea que se estaba preguntando— así que la intención sólo se atiende
+    # acá y en el resto de los pasos cae en el pedido repetido de siempre.
+    if intent == Intencion.RECHAZAR:
+        if estado == Estado.ESPERANDO_CONFIRMACION:
+            logger.info("rechazó el resumen: no reservo y espero qué cambia")
+            return {"sin_entender": 0, "_plantilla": "no_reservo"}
+        return {"_plantilla": "no_entendi"}
+
     # ---- Transversales: no mueven el flujo ----
     if intent == Intencion.CANCELAR:
+        # "Cancelar" quiere decir dos cosas distintas según dónde esté la
+        # persona, y contestarlas igual es lo que hacía daño.
+        #
+        # Con algo en curso —eligió un servicio, un día, una hora— cancelar es
+        # abandonar ESE pedido, y el bot sí puede: no hay nada reservado que
+        # deshacer.
+        #
+        # Sin nada en curso está hablando del turno que ya tiene. Ese el bot no
+        # lo puede cancelar, y decir que sí es peor que decir que no: la
+        # persona no va y el lugar le queda ocupado al negocio.
+        #
+        # El bloque de CONFIRMADO de más arriba ya limpió lo elegido, así que
+        # justo después de reservar esto cae —bien— en la segunda rama.
+        en_curso = any(conv.get(k) for k in ("servicio_id", "fecha", "hora"))
         return {"estado": Estado.APERTURA.value, "servicio_id": None,
                 "profesional_id": None, "fecha": None, "hora": None,
-                "opciones": [], "_plantilla": "cancelado"}
+                "opciones": [],
+                "_plantilla": "cancelado" if en_curso else "no_puedo_cancelar"}
 
     if intent == Intencion.CONSULTAR_INFO:
         consulta = ent.get("consulta") or conv["mensaje"]
@@ -364,7 +530,20 @@ async def avanzar(conv: Conversacion, config) -> dict:
         if fallas >= LIMITE_SIN_ENTENDER and _hubo_avance(conv):
             return {**await _escalar(conv, cfg, negocio, estado, "trabado"),
                     "sin_entender": 0}
-        return {"sin_entender": 0 if fallas > LIMITE_SIN_ENTENDER else fallas}
+
+        # Y el que nunca eligió nada tampoco puede girar para siempre. Antes el
+        # contador se reseteaba solo al pasarse del límite —subía a 2, volvía a
+        # 0, arrancaba de nuevo— así que el bot repetía el mismo pedido sin
+        # cambiar nunca y sin ninguna puerta de salida. Ahora se le ofrecen las
+        # dos que puede abrir sola, sin molestar a nadie del negocio.
+        if fallas >= LIMITE_ATASCADO:
+            logger.info("atascado sin avanzar tras %d intentos", fallas)
+            return {"sin_entender": 0, "_plantilla": "atascado"}
+
+        # Y mientras tanto, decirle que no se entendió. Repetir el pedido
+        # idéntico, sin una palabra que lo reconozca, se lee como que el bot se
+        # colgó — justo cuando hace falta la señal contraria.
+        return {"sin_entender": fallas, "_plantilla": "no_entendi"}
 
     # Primer contacto: SIEMPRE la apertura, sin importar qué haya escrito.
     # Es el requisito de que la puerta de entrada sea siempre la misma; el
@@ -372,16 +551,22 @@ async def avanzar(conv: Conversacion, config) -> dict:
     if estado == Estado.APERTURA:
         return await _abrir(saltear, negocio)
 
-    # Un nombre escrito en la confirmación corrige el nombre y se queda ahí.
+    # Un nombre escrito en la confirmación corrige a nombre de QUIÉN va el
+    # turno, y no quién sos vos.
     #
     # Sin esto caía en "volver a un paso anterior": lo mandaba al paso del
     # nombre y le pedía el nombre que acababa de escribir. Corregir un dato
     # que está a la vista no puede costar dos mensajes y perder el resumen.
+    #
+    # Escribe `nombre_del_turno` y NO `nombre`: acá es donde alguien dice "es
+    # para mi hija". Guardarlo como identidad hacía que el bot la saludara a
+    # ella para siempre y le pusiera su nombre a todos los turnos que sacara
+    # después el padre.
     if estado == Estado.ESPERANDO_CONFIRMACION and intent == Intencion.DAR_NOMBRE:
         limpio = limpiar_nombre(ent.get("nombre") or "")
         if len(limpio) >= 2:
-            logger.info("nombre corregido en la confirmación: %s", limpio)
-            return {"nombre": limpio, "sin_entender": 0}
+            logger.info("el turno va a nombre de: %s", limpio)
+            return {"nombre_del_turno": limpio, "sin_entender": 0}
         return {}
 
     # ---- ¿Quiere volver a un paso anterior? ----
@@ -400,7 +585,10 @@ async def avanzar(conv: Conversacion, config) -> dict:
 
     resuelto = await _resolver(estado, conv, ent, negocio, cfg)
     if resuelto is None:
-        return {}  # no se pudo resolver: se repite el pedido
+        # Se entendió la intención pero no a qué apuntaba: nombró un servicio
+        # que no existe, o uno que coincide con dos. Se repite el pedido y se
+        # dice que no se entendió, que es exactamente lo que pasó.
+        return {"_plantilla": "no_entendi"}
     if "_rechazo" in resuelto:
         # Pidió algo que no está disponible. NO avanza: se explica el motivo y
         # se ofrecen las opciones cercanas, en el mismo paso.
@@ -487,6 +675,28 @@ def _hubo_avance(conv: Conversacion) -> bool:
     """¿La persona llegó a elegir algo, o viene mandando ruido desde el arranque?"""
     return any(conv.get(k) for k in ("servicio_id", "profesional_id",
                                      "fecha", "hora", "nombre"))
+
+
+def _sesion_vencida(ultimo_en: str | None) -> bool:
+    """¿Pasó tanto desde el último mensaje que lo elegido ya no sirve?
+
+    Es distinto de `_espera_vencida`, que mide cuánto hace que el negocio no
+    contesta una escalación. Acá se mide a la persona, y lo que está en juego
+    son los DATOS: una fecha elegida hace tres semanas sigue guardada como si
+    fuera de ahora, y el paso siguiente era confirmarla.
+
+    Sin sello previo no está vencida: es el primer mensaje de la conversación,
+    o uno guardado antes de que este campo existiera. Ante la duda, seguir
+    donde estaba es menos molesto que reiniciarle el pedido a alguien que
+    acaba de escribir.
+    """
+    if not ultimo_en:
+        return False
+    try:
+        transcurrido = (ahora() - datetime.fromisoformat(ultimo_en)).total_seconds()
+    except (ValueError, TypeError):
+        return False
+    return transcurrido > ajustes().sesion_minutos * 60
 
 
 def _espera_vencida(conv: Conversacion) -> bool:
@@ -583,7 +793,17 @@ async def _resolver(
     if estado == Estado.ESPERANDO_STAFF:
         gente = await _aturno.listar_personal(negocio, conv.get("servicio_id"))
         if indice is not None:
-            return {"profesional_id": gente[indice].id if indice < len(gente) else None}
+            if indice < len(gente):
+                return {"profesional_id": gente[indice].id}
+            # El renglón que sigue al último nombre es "Me da igual", que lo
+            # agrega `_pedir_paso`: no es una persona, es la opción de no
+            # elegir ninguna. Por eso ESE índice vale y significa `None`.
+            if indice == len(gente):
+                return {"profesional_id": None}
+            # Cualquier otro índice sí está fuera de la lista, y ahí `None` es
+            # "no se pudo resolver" y no "me da igual": elegir por alguien que
+            # señaló mal es peor que volver a mostrarle la lista.
+            return None
         nombre = (ent.get("profesional") or "").lower()
         if nombre in {"cualquiera", "me da igual", "el que sea", "no importa"}:
             return {"profesional_id": None}
@@ -711,7 +931,10 @@ async def _horarios(conv: Conversacion, negocio: str):
 
 async def _reservar(conv: Conversacion, cambios: dict, negocio: str, cfg: dict) -> dict:
     """Crea el turno. Un rechazo es un resultado normal, no una excepción."""
-    nombre = conv.get("nombre") or cfg.get("nombre_cliente") or ""
+    # El del turno gana si alguien lo corrigió; si no, va el del contacto.
+    nombre = (conv.get("nombre_del_turno")
+              or conv.get("nombre")
+              or cfg.get("nombre_cliente") or "")
     fecha = date.fromisoformat(conv["fecha"])
     hora = datetime.strptime(conv["hora"], "%H:%M").time()
 
@@ -720,6 +943,44 @@ async def _reservar(conv: Conversacion, cambios: dict, negocio: str, cfg: dict) 
         DatosDelCliente(nombre=nombre, telefono=cfg.get("telefono", "")),
         conv.get("profesional_id"),
     )
+
+    # ---- El servicio se seña y no se pudo cobrar ----
+    #
+    # No se promete el turno. El negocio puso la seña justamente para no dar ese
+    # servicio sin garantía, así que darlo igual por WhatsApp sería usar este
+    # canal para saltear una regla suya — que es exactamente el agujero que esto
+    # vino a cerrar.
+    #
+    # La reserva que se llegó a crear NO se cancela a mano: quedó apartando el
+    # horario con su vencimiento y lo suelta sola. Para eso existe la retención,
+    # y además el endpoint público de cancelar exige dos horas de anticipación,
+    # o sea que para un turno de hoy no serviría.
+    if turno.motivo_del_rechazo == "no_se_pudo_cobrar_la_senia":
+        logger.warning("no se pudo cobrar la seña en %s: no confirmo el turno", negocio)
+        return {"estado": Estado.ESPERANDO_HORARIO.value, "hora": None,
+                "_plantilla": "sin_cobro"}
+
+    # ---- El turno existe, falta que entre la seña ----
+    #
+    # No es "confirmado" y no puede contarse como tal: el horario está apartado
+    # por un rato y se suelta si nadie paga. El estado propio es lo que permite
+    # que el mensaje siguiente de la persona no arranque un pedido nuevo encima
+    # de uno que todavía puede cerrarse.
+    if turno.estado.value == "pendiente_de_sena":
+        logger.info("turno %s esperando la seña de $%s", turno.booking_id, turno.senia)
+        return {
+            "estado": Estado.ESPERANDO_SENIA.value,
+            "nombre_del_turno": None,
+            "codigo_pendiente": turno.codigo,
+            "_plantilla": "senia",
+            "_datos": {"monto": turno.senia, "link": turno.link_de_pago,
+                       "minutos": turno.minutos_de_retencion,
+                       "codigo": turno.codigo,
+                       "servicio": turno.servicio,
+                       "profesional": turno.profesional,
+                       "fecha": turno.fecha.isoformat() if turno.fecha else None,
+                       "hora": turno.hora.strftime("%H:%M") if turno.hora else None},
+        }
 
     if turno.estado.value == "rechazado":
         consulta = await _aturno.consultar_pedido(
@@ -739,6 +1000,12 @@ async def _reservar(conv: Conversacion, cambios: dict, negocio: str, cfg: dict) 
 
     return {
         "estado": Estado.CONFIRMADO.value,
+        # El nombre del turno se limpia acá, y es lo que evita que el arreglo
+        # dure una sola reserva: es de ESTA, no de la persona. Sin esto, quien
+        # saca un turno para su hija le sigue sacando turnos a ella el mes que
+        # viene sin haberlo pedido — el mismo bug de antes, corrido un lugar.
+        # El del contacto NO se toca: ese es justamente el que tiene que durar.
+        "nombre_del_turno": None,
         "_plantilla": "confirmado",
         "_datos": {
             "servicio": turno.servicio,
@@ -765,7 +1032,49 @@ async def responder(conv: Conversacion, config) -> dict:
     # Plantillas puntuales que no dependen del paso
     if especial == "cancelado":
         return {"respuesta": P.cancelado(), "opciones": []}
+    if especial == "de_nada":
+        return {"respuesta": P.de_nada(), "opciones": []}
     datos = conv.get("_datos") or {}
+
+    if especial == "no_reservo":
+        # Se queda en el resumen y con las mismas opciones: no se reservó nada
+        # y tampoco se perdió nada. El paso siguiente lo elige la persona.
+        return {"respuesta": P.no_reservo(), "opciones": ["sí", "no"]}
+
+    if especial == "senia":
+        # El horario está apartado y falta el pago. Sin opciones: acá no se
+        # elige nada de una lista, se paga (o se deja vencer).
+        return {"respuesta": P.pedir_senia(datos["monto"], datos["link"],
+                                           datos.get("minutos")),
+                "opciones": []}
+
+    if especial == "falta_pagar":
+        return {"respuesta": P.falta_pagar(), "opciones": []}
+
+    if especial == "sin_cobro":
+        return {"respuesta": P.no_se_pudo_cobrar(_link_del_negocio(negocio)),
+                "opciones": []}
+
+    if especial == "atascado":
+        return {"respuesta": P.atascado(_link_del_negocio(negocio)), "opciones": []}
+
+    if especial == "no_entendi":
+        # El pedido del paso, con una línea adelante que reconoce que no se
+        # entendió. Repetir el texto idéntico se lee como que el bot se colgó.
+        paso = await _pedir_paso(conv, cfg, negocio, nombre_negocio,
+                                 await _aturno.listar_servicios(negocio))
+        return {"respuesta": P.no_entendi(paso["respuesta"]),
+                "opciones": paso.get("opciones", [])}
+
+    if especial == "sesion_reiniciada":
+        servicios = await _aturno.listar_servicios(negocio)
+        cabecera = P.apertura(nombre_negocio, servicios, cfg.get("nombre_cliente"))
+        if estado == Estado.ESPERANDO_SERVICIO:
+            return {"respuesta": P.sesion_reiniciada(cabecera),
+                    "opciones": [s.nombre for s in servicios]}
+        paso = await _pedir_paso(conv, cfg, negocio, nombre_negocio, servicios)
+        return {"respuesta": P.sesion_reiniciada(f"{cabecera}\n\n{paso['respuesta']}"),
+                "opciones": paso.get("opciones", [])}
 
     if especial == "apertura":
         servicios = await _aturno.listar_servicios(negocio)
@@ -808,21 +1117,12 @@ async def responder(conv: Conversacion, config) -> dict:
         return {"respuesta": P.volvio_el_bot(paso["respuesta"]),
                 "opciones": paso.get("opciones", [])}
 
-    if especial == "link":
-        base = (ajustes().aturno_web_url or "").rstrip("/")
-        url = f"{base}/{negocio}" if base else None
-        return {"respuesta": P.link_web(nombre_negocio, url)}
+    if especial == "no_puedo_cancelar":
+        return {"respuesta": P.no_puedo_cancelar(_link_del_negocio(negocio)),
+                "opciones": []}
 
-    if especial == "persona":
-        # Si aturno no contesta, igual hay que responder algo: el pedido de
-        # hablar con alguien es el peor momento para quedarse mudo.
-        try:
-            datos_contacto = await _aturno.contacto(negocio)
-        except Exception:  # noqa: BLE001
-            logger.warning("no se pudo leer el contacto de %s", negocio, exc_info=True)
-            datos_contacto = None
-        return {"respuesta": P.hablar_con_persona(
-            cfg.get("nombre_negocio") or "el negocio", datos_contacto)}
+    if especial == "link":
+        return {"respuesta": P.link_web(nombre_negocio, _link_del_negocio(negocio))}
 
     if especial == "confirmado":
         return {"respuesta": P.confirmado(
@@ -845,6 +1145,23 @@ async def responder(conv: Conversacion, config) -> dict:
 
     servicios = await _aturno.listar_servicios(negocio)
     return await _pedir_paso(conv, cfg, negocio, nombre_negocio, servicios)
+
+
+def _link_del_negocio(negocio: str) -> str | None:
+    """La página pública del negocio, o None si no hay con qué armarla.
+
+    Sin `ATURNO_WEB_URL` no se inventa ninguna: un link roto es peor que
+    ninguno, porque la persona lo abre, ve un 404 y concluye que el negocio no
+    funciona. Es la misma regla que aplican `link_web` y `demorado`.
+
+    OJO con el identificador: la página es `<web>/<slug>`, y acá `negocio` es
+    el `business_id`, que en este proyecto ES el slug (ver el comentario de
+    TENANTS en config.py). Si algún día el business_id pasa a ser el uid de
+    Firebase, este es uno de los tres lugares que hay que cambiar, o el link
+    empieza a dar 404.
+    """
+    base = (ajustes().aturno_web_url or "").rstrip("/")
+    return f"{base}/{negocio}" if base else None
 
 
 async def _pedir_paso(conv: Conversacion, cfg: dict, negocio: str,
@@ -897,7 +1214,9 @@ async def _pedir_paso(conv: Conversacion, cfg: dict, negocio: str,
         return {"respuesta": P.pedir_nombre(), "opciones": []}
 
     if estado == Estado.ESPERANDO_CONFIRMACION:
-        nombre_svc = next(s.nombre for s in servicios if s.id == conv["servicio_id"])
+        elegido = next(s for s in servicios if s.id == conv["servicio_id"])
+        nombre_svc = elegido.nombre
+        senia_del_servicio = elegido.senia if elegido.requiere_senia else 0
         quien = None
         if conv.get("profesional_id"):
             gente = await _aturno.listar_personal(negocio)
@@ -907,7 +1226,18 @@ async def _pedir_paso(conv: Conversacion, cfg: dict, negocio: str,
                 nombre_svc, quien,
                 date.fromisoformat(conv["fecha"]),
                 datetime.strptime(conv["hora"], "%H:%M").time(),
-                conv.get("nombre") or cfg.get("nombre_cliente"),
+                (conv.get("nombre_del_turno")
+                 or conv.get("nombre") or cfg.get("nombre_cliente")),
+                # La seña se avisa ACÁ, antes de que diga que sí, igual que la
+                # web abre su modal antes de crear nada. Enterarse recién cuando
+                # llega el link es aceptar una cosa y recibir otra.
+                senia=senia_del_servicio,
+                # Si el nombre no se dijo en ESTA conversación, viene de la vez
+                # anterior y puede no ser de quien va el turno. El resumen lo
+                # pregunta en vez de afirmarlo. Es acá y no con un mensaje
+                # aparte a propósito: el resumen ya se manda igual, así que
+                # confirmar sale gratis.
+                de_memoria=not (conv.get("nombre_del_turno") or conv.get("nombre")),
             ),
             "opciones": ["sí", "no"],
         }

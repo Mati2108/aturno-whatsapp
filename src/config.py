@@ -54,10 +54,36 @@ class Config(BaseSettings):
     # túnel el server ve "localhost", no la URL real.
     public_url: str = ""
 
+    # Cuándo avisar que está tardando, y cuándo darse por vencido. Van acá y no
+    # como constantes fijas para poder bajarlos al probar: con el aviso en 1
+    # segundo se ve el mensaje de demora en cada turno, sin tener que esperar a
+    # que el backend arranque en frío para reproducirlo.
+    #
+    # El default de 10 sale de los límites de respuesta de Nielsen: es el techo
+    # para que alguien mantenga la atención puesta en un diálogo.
+    aviso_segundos: int = 10
+    techo_segundos: int = 30
+
     # Apagar la validación de firma solo para probar con curl desde la máquina.
     # En producción va siempre en True: el webhook es una URL pública y sin
     # firma cualquiera puede postear turnos falsos.
     validar_firma: bool = True
+
+    # ---- Entrega de los mensajes ----
+    # "api" (Twilio de verdad) | "consola" (los imprime y no manda nada).
+    #
+    # Mismo patrón que `aturno_modo` de más abajo, y por el mismo motivo: se
+    # puede probar el producto ENTERO sin depender del servicio externo. Acá
+    # además importa la plata: la cuenta trial de Twilio tiene un tope de 50
+    # mensajes salientes cada 24 horas, y probar a mano lo quema en una tarde
+    # —después el bot recibe, piensa y no puede contestar, que se ve igual que
+    # estar roto—.
+    #
+    # En "consola" se prueba todo lo que pasa ANTES de Twilio, que es todo lo
+    # que este producto hace: entender, decidir, consultar aturno, redactar, y
+    # el orden y el tiempo en que salen los mensajes. Lo único que no se prueba
+    # es que Twilio entregue.
+    twilio_modo: str = "api"
 
     # ---- Embeddings ----
     # "api" (Gemini, sin memoria) | "local" (fastembed, +805 MB, sin red)
@@ -91,6 +117,17 @@ class Config(BaseSettings):
     # que nadie del negocio conteste, vuelve a tomar la conversación en vez de
     # dejar a la persona hablándole a un chat mudo.
     escalacion_minutos: int = 45
+
+    # Cuánto vale lo que la persona eligió antes de que haya que preguntarlo de
+    # nuevo. Sin esto la conversación no vencía nunca: quien llegó al resumen,
+    # se fue, y volvió a la semana con un "dale" estaba confirmando la fecha de
+    # entonces — un día que ya pasó.
+    #
+    # Media hora es lo que dura una interrupción normal: te atienden, cortás,
+    # volvés. Más largo empieza a guardar decisiones que la persona ya no
+    # recuerda haber tomado; más corto le hace repetir todo a alguien que sólo
+    # se distrajo un rato.
+    sesion_minutos: int = 30
 
 
 @lru_cache

@@ -25,7 +25,13 @@ from pydantic import BaseModel, Field, field_validator
 class Tenant(BaseModel):
     """Un negocio de aturno. Todo en el sistema cuelga de acá.
 
-    `business_id` es el uid de Firebase con el que aturno keyea `businesses/{uid}`.
+    `business_id` es el SLUG del negocio en aturno —el mismo que va en su URL
+    pública y el mismo con el que se llama su archivo en `datos/`—, no el uid
+    de Firebase. Un solo identificador para las tres cosas (la API, el RAG y el
+    ruteo) en vez de una tabla de equivalencias que hay que mantener; el uid lo
+    resuelve `AturnoAPI._uid()` cuando hace falta. Decía "el uid de Firebase" y
+    era falso: de que sea el slug depende que el link a la página no dé 404.
+
     Ningún dato puede cruzarse entre tenants: es el requisito de seguridad que
     define el diseño del RAG y del checkpointer.
     """
@@ -121,6 +127,16 @@ class Servicio(BaseModel):
     nombre: str = Field(min_length=1)
     duracion_minutos: int = Field(gt=0, le=8 * 60)
     precio: float = Field(ge=0)
+
+    # Si este servicio se seña, y cuánto. Viaja con el servicio y no se pide
+    # aparte porque hace falta ANTES de reservar: el resumen tiene que decir
+    # que hay una seña, igual que la web abre su modal antes de crear nada.
+    # Enterarse recién cuando llega el link de pago es enterarse tarde.
+    #
+    # `senia` es una estimación para mostrar; el monto que se cobra lo calcula
+    # el servidor de aturno desde el `depositConfig` del servicio real.
+    requiere_senia: bool = False
+    senia: int = Field(default=0, ge=0)
 
     @field_validator("nombre")
     @classmethod
@@ -331,10 +347,40 @@ class TurnoConfirmado(BaseModel):
     profesional: str | None = None
     motivo_del_rechazo: str | None = None
 
+    # ---- La seña, cuando el servicio la pide ----
+    #
+    # Con `estado = PENDIENTE_DE_SENA` el turno EXISTE pero todavía no es de
+    # nadie: aturno lo guarda como `pending_deposit`, que aparta el horario
+    # `minutos_de_retencion` y lo suelta solo si nadie paga. Los tres campos
+    # viajan juntos porque el mensaje que va a recibir la persona necesita los
+    # tres: cuánto, dónde pagar, y hasta cuándo le guardamos el lugar.
+    #
+    # `senia` la calcula el SERVIDOR de aturno a partir del `depositConfig` del
+    # servicio real; acá llega para mostrarla, no para decidirla. Es la misma
+    # regla que rige en `planes.js` y en `senas.js`: ningún monto que se le
+    # manda a Mercado Pago sale de quien pide el cobro.
+    senia: int | None = None
+    link_de_pago: str | None = None
+    minutos_de_retencion: int | None = None
+
     @field_validator("motivo_del_rechazo")
     @classmethod
     def _rechazo_explicado(cls, valor: str | None, info) -> str | None:
         """Un rechazo sin motivo deja al bot sin nada que decirle a la persona."""
         if info.data.get("estado") == EstadoDelTurno.RECHAZADO and not valor:
             raise ValueError("Un turno rechazado tiene que explicar por qué")
+        return valor
+
+    @field_validator("link_de_pago")
+    @classmethod
+    def _la_senia_necesita_link(cls, valor: str | None, info) -> str | None:
+        """Un turno esperando la seña sin link es una persona sin dónde pagar.
+
+        Es el estado peor de los tres posibles: el horario queda apartado, la
+        persona cree que tiene algo, y no hay forma de completarlo. Si el link
+        no se pudo generar, el turno NO puede volver como pendiente de seña —
+        vuelve como rechazado, con su motivo, y la retención vence sola.
+        """
+        if info.data.get("estado") == EstadoDelTurno.PENDIENTE_DE_SENA and not valor:
+            raise ValueError("Un turno pendiente de seña tiene que traer el link de pago")
         return valor

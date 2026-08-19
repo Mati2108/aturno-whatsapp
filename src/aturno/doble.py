@@ -42,7 +42,11 @@ from src.schemas import (
 SERVICIOS_DEMO: dict[str, list[Servicio]] = {
     "demo-peluqueria": [
         Servicio(id="svc-corte", nombre="Corte de pelo", duracion_minutos=30, precio=8000),
-        Servicio(id="svc-color", nombre="Coloración", duracion_minutos=90, precio=25000),
+        # Con seña, como el que motivó todo esto: un servicio caro que el
+        # negocio no quiere dar sin una garantía. El 30% sale del mismo default
+        # que usa aturno cuando el negocio no configura otra cosa.
+        Servicio(id="svc-color", nombre="Coloración", duracion_minutos=90,
+                 precio=25000, requiere_senia=True, senia=7500),
         Servicio(id="svc-barba", nombre="Perfilado de barba", duracion_minutos=20, precio=5000),
     ],
     "demo-consultorio": [
@@ -98,6 +102,16 @@ class AturnoDoble(ClienteAturno):
         # El profesional entra en la clave: dos personas pueden atender a la
         # misma hora, que es justamente para lo que existe tener equipo.
         self._ocupados: dict[tuple[str, str, date, time], str] = {}
+        # Para poder probar qué pasa cuando el link de pago NO sale: Mercado
+        # Pago sin conectar, token vencido, o su API caída. Es un caso normal
+        # —depende de que el negocio haya hecho el OAuth— y el bot tiene que
+        # contestarlo bien, así que tiene que poder probarse sin desconectar
+        # nada de verdad.
+        self.link_falla = False
+        # Lo que el doble dice que dura la retención del horario. Es el mismo
+        # número que `RETENCION_MINUTOS` en backend/src/reservas.js; está acá
+        # para que las pruebas puedan mirarlo sin pegarle a aturno.
+        self.minutos_de_retencion = 15
 
     async def contacto(self, business_id: str) -> Contacto:
         """Contacto de demostración, para poder probar la derivación sin red."""
@@ -317,6 +331,31 @@ class AturnoDoble(ClienteAturno):
 
         booking_id = f"bk-{secrets.token_hex(6)}"
         self._ocupados[(business_id, asignado.id, dia, hora)] = booking_id
+
+        # Un servicio con seña no nace confirmado ni acá: nace esperando el
+        # pago, con el horario apartado. El doble imita eso —y el link falso—
+        # porque si no, todo lo que se pruebe contra el doble pasaría por el
+        # camino sin seña y el de la seña no lo probaría nadie.
+        #
+        # `link_falla` es el interruptor para probar el otro lado: qué hace el
+        # bot cuando Mercado Pago no está conectado o el link no sale.
+        if servicio.requiere_senia:
+            if self.link_falla:
+                return TurnoConfirmado(
+                    estado=EstadoDelTurno.RECHAZADO,
+                    fecha=dia, hora=hora, servicio=servicio.nombre,
+                    motivo_del_rechazo="no_se_pudo_cobrar_la_senia",
+                )
+            return TurnoConfirmado(
+                estado=EstadoDelTurno.PENDIENTE_DE_SENA,
+                booking_id=booking_id,
+                codigo=self._codigo(),
+                fecha=dia, hora=hora, servicio=servicio.nombre,
+                profesional=asignado.nombre,
+                senia=servicio.senia,
+                link_de_pago=f"https://www.mercadopago.com.ar/checkout/{booking_id}",
+                minutos_de_retencion=self.minutos_de_retencion,
+            )
 
         return TurnoConfirmado(
             estado=EstadoDelTurno.CONFIRMADO,

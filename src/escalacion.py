@@ -15,11 +15,15 @@ QUÉ HACE ESTE MÓDULO Y QUÉ NO
 -----------------------------
 Acá está la mitad que vive en el bot: detectar, marcar, avisar y callarse.
 
-La otra mitad vive en aturno y todavía no existe: recibir el aviso, mostrarlo
-como notificación en la app, y darle al dueño una caja de texto para responder
-en ese hilo. Está separado a propósito — el contrato es este `Escalacion`, y
-mientras del otro lado no haya nadie escuchando, el aviso queda en el log con
-todo lo necesario para atenderlo a mano.
+La otra mitad vive en aturno y HOY YA EXISTE, pero por otro camino: el panel
+recibe todos los mensajes por `/api/whatsapp/bot/evento`, y el del pedido viaja
+con `necesita_humano` en true. Por eso `_escalar` (flujo.py) cuenta el panel
+configurado como aviso entregado aunque este webhook no esté puesto.
+
+`ESCALACION_WEBHOOK` queda para quien no use el panel —un negocio que quiera el
+aviso en Slack o en su propio sistema— y el contrato sigue siendo este
+`Escalacion`. Sin ninguno de los dos, el aviso queda en el log con todo lo
+necesario para atenderlo a mano.
 
 POR QUÉ UN WEBHOOK Y NO ESCRIBIR EN FIRESTORE
 ---------------------------------------------
