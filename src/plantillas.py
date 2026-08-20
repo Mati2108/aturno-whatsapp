@@ -114,9 +114,13 @@ def apertura(negocio: str, servicios: list[Servicio], nombre: str | None = None)
     # sola antes de empezar. Decía "¿o tenés alguna pregunta?", en singular y
     # como alternativa al turno: se leía como "elegí una de las dos cosas", y
     # el que ya estaba eligiendo el día no volvía a preguntar nada.
+    # Y cierra con una pregunta ABIERTA, que es lo que estaba antes y hay que
+    # conservar: este es el único momento sin una lista que responder, así que
+    # un "elegí una opción" acá manda a la gente a tirar un número al azar para
+    # poder seguir, y recién después preguntar lo que quería preguntar.
     bloques.append("Preguntame lo que quieras —precios, cómo llegar, formas de "
-                   "pago, lo que sea— las veces que necesites, antes o durante.\n"
-                   "Y cuando quieras, sacamos el turno.")
+                   "pago, lo que sea— las veces que necesites, antes o durante.\n\n"
+                   "¿Qué necesitás?")
 
     # La salida a una persona va nombrada, pero última y en su propio bloque:
     # si está escondida no sirve de nada, y si compite con la pregunta de
