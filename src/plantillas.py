@@ -110,8 +110,13 @@ def apertura(negocio: str, servicios: list[Servicio], nombre: str | None = None)
     # entra todo lo que no es reservar: precios, dónde quedan, si hay lugar
     # mañana. Un "elegí una opción" acá manda a la gente a contestar un número
     # al azar para poder seguir, y después preguntar lo que quería preguntar.
-    bloques.append("¿Querés sacar un turno o tenés alguna pregunta?\n"
-                   "Escribime lo que necesites.")
+    # Y se dice que las preguntas son MUCHAS y en cualquier momento, no una
+    # sola antes de empezar. Decía "¿o tenés alguna pregunta?", en singular y
+    # como alternativa al turno: se leía como "elegí una de las dos cosas", y
+    # el que ya estaba eligiendo el día no volvía a preguntar nada.
+    bloques.append("Preguntame lo que quieras —precios, cómo llegar, formas de "
+                   "pago, lo que sea— las veces que necesites, antes o durante.\n"
+                   "Y cuando quieras, sacamos el turno.")
 
     # La salida a una persona va nombrada, pero última y en su propio bloque:
     # si está escondida no sirve de nada, y si compite con la pregunta de
@@ -327,7 +332,11 @@ def resumen(servicio: str, staff: str | None, dia: date, hora,
                       else f"Para: {cliente} (el nombre que me diste antes)")
     lineas.append(f"Servicio: {servicio}")
     if staff:
-        lineas.append(f"Con: {staff}")
+        # "Te atiende" y no "Con": la etiqueta corta no decía qué era ese
+        # nombre, y quien lee un resumen antes de confirmar no tiene que
+        # deducir nada. El dato se queda —la persona lo eligió dos pasos
+        # antes— pero dicho de manera que se entienda solo.
+        lineas.append(f"Te atiende: {staff}")
     lineas += [f"Día: {_dia_corto(dia)}", f"Hora: {hora:%H:%M}"]
     # La seña se avisa ACÁ, antes de confirmar, y no cuando llega el link.
     #
