@@ -105,19 +105,18 @@ def apertura(negocio: str, servicios: list[Servicio], nombre: str | None = None)
             lista.append(f"   {s.duracion_minutos} min · {_plata(s.precio)}")
         bloques.append("\n".join(lista))
 
-    # La pregunta es abierta a propósito. Este es el único momento de la
-    # conversación donde no hay una lista que responder, y por eso es por donde
-    # entra todo lo que no es reservar: precios, dónde quedan, si hay lugar
-    # mañana. Un "elegí una opción" acá manda a la gente a contestar un número
-    # al azar para poder seguir, y después preguntar lo que quería preguntar.
-    # Y se dice que las preguntas son MUCHAS y en cualquier momento, no una
-    # sola antes de empezar. Decía "¿o tenés alguna pregunta?", en singular y
-    # como alternativa al turno: se leía como "elegí una de las dos cosas", y
-    # el que ya estaba eligiendo el día no volvía a preguntar nada.
-    # Y cierra con una pregunta ABIERTA, que es lo que estaba antes y hay que
-    # conservar: este es el único momento sin una lista que responder, así que
-    # un "elegí una opción" acá manda a la gente a tirar un número al azar para
-    # poder seguir, y recién después preguntar lo que quería preguntar.
+    # Dos cosas en este bloque, y las dos costaron un caso real.
+    #
+    # Que las preguntas son MUCHAS y en cualquier momento. Decía "¿querés sacar
+    # un turno o tenés alguna pregunta?": en singular y planteado como
+    # alternativa, o sea "elegí una de las dos". Así, el que ya estaba
+    # eligiendo el día no volvía a preguntar nada.
+    #
+    # Y que cierra con una pregunta ABIERTA. Este es el único momento de la
+    # conversación sin una lista que responder, y por eso es por donde entra
+    # todo lo que no es reservar. Un "elegí una opción" acá manda a la gente a
+    # tirar un número al azar para poder seguir, y recién después preguntar lo
+    # que quería preguntar.
     bloques.append("Preguntame lo que quieras —precios, cómo llegar, formas de "
                    "pago, lo que sea— las veces que necesites, antes o durante.\n\n"
                    "¿Qué necesitás?")
@@ -360,6 +359,19 @@ def resumen(servicio: str, staff: str | None, dia: date, hora,
     else:
         lineas.append("¿Confirmo? Respondé SÍ o NO.")
     return "\n".join(lineas)
+
+
+def que_nombre() -> str:
+    """Negó el nombre que teníamos pero no dijo cuál es el suyo.
+
+    Es el caso de "no me llamo Milagros", a secas. El bot no puede adivinarlo
+    —el único nombre de la frase es el que la persona está rechazando— así que
+    lo pregunta, y pide disculpas primero porque veníamos llamándola mal.
+
+    Corto y sin repetir el nombre viejo: nombrarlo otra vez para decir que no
+    es ese es justo lo que no quiere leer.
+    """
+    return "Perdón. ¿Cómo te llamás?"
 
 
 def nombre_actualizado(nombre: str) -> str:

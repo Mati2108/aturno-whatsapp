@@ -383,6 +383,45 @@ def nombre_propio(texto: str) -> str | None:
     return " ".join(p.capitalize() for p in crudo.split() if p)[:60] or None
 
 
+# Cómo se niega un nombre. Lo que sigue a estas frases es lo que NO sos.
+_NEGACIONES = (
+    "no me llamo", "no me llama", "mi nombre no es", "no soy", "yo no soy",
+    "ese no es mi nombre", "no me digas", "yo no me llamo",
+)
+
+
+def nombre_negado(texto: str, nombre: str) -> bool:
+    """¿La persona está NEGANDO ese nombre en vez de dárnoslo?
+
+    POR QUÉ HACE FALTA, Y POR QUÉ EN CÓDIGO
+    A "no me llamo Milagros" el clasificador contesta `dar_nombre` y extrae…
+    "Milagros": el nombre negado. Es entendible —es el único nombre en la
+    frase— pero el resultado es el peor posible: el bot contesta "Listo, te
+    anoto como Milagros" a alguien que acaba de decir que NO se llama así. Le
+    reafirma el error, que es peor que ignorarlo.
+
+    Se resuelve acá y no pidiéndoselo mejor al prompt por la regla de siempre
+    en este repo: lo determinístico va en código. "No" delante de un nombre es
+    exactamente eso, y además tiene que seguir funcionando con el clasificador
+    caído.
+
+    Sólo devuelve True cuando NO hay un nombre nuevo después. "No me llamo
+    Milagros, me llamo Matías" trae la corrección adentro: ahí el modelo extrae
+    "Matías" —está medido— y esto no se tiene que meter, o rompería el caso que
+    más importa.
+    """
+    limpio = _normalizar(texto)
+    objetivo = _normalizar(nombre or "")
+    if not limpio or not objetivo:
+        return False
+
+    # La negación tiene que estar PEGADA al nombre, no en cualquier parte de la
+    # frase. Con sólo pedir que aparezcan las dos cosas, "no me llamo Milagros,
+    # me llamo Matías" daba negación de "Matías" —empieza con "no me llamo" y
+    # contiene "Matías"— y se rompía justo el caso que más importa.
+    return any(f"{negacion} {objetivo}" in limpio for negacion in _NEGACIONES)
+
+
 # Lo que dice alguien que ya pagó la seña y viene a avisarlo.
 #
 # Va como tabla y no como intención del modelo porque no necesita contexto: en

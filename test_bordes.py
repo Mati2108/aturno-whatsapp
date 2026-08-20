@@ -425,8 +425,12 @@ async def t18_se_puede_corregir_el_nombre():
 
     F.configurar(AturnoDoble())
 
-    async def avanzar(estado: Estado, intent: Intencion, nombre: str | None = None):
-        conv = {"mensaje": "no me llamo Milagros, me llamo Matías",
+    texto_del_caso = ["no me llamo Milagros, me llamo Matías"]
+
+    async def avanzar(estado: Estado, intent: Intencion, nombre: str | None = None,
+                      texto: str | None = None):
+        texto_del_caso[0] = texto or "no me llamo Milagros, me llamo Matías"
+        conv = {"mensaje": texto_del_caso[0],
                 "estado": estado.value, "intent": intent.value,
                 "entidades": {"nombre": nombre} if nombre else {}}
         return await F.avanzar(conv, _cfg("t18", "Milagros"))
@@ -452,6 +456,36 @@ async def t18_se_puede_corregir_el_nombre():
     r = await avanzar(Estado.APERTURA, Intencion.DAR_NOMBRE, "a")
     chequear("un nombre de una letra no pisa nada", not r.get("nombre"),
              f"nombre={r.get('nombre')!r}")
+
+    # ---- Negar sin decir el nuevo ----
+    #
+    # "no me llamo Milagros", a secas. El clasificador devuelve dar_nombre y
+    # extrae... "Milagros": el nombre NEGADO. Sin esta guarda el bot contesta
+    # "Listo, te anoto como Milagros" y le reafirma el error a alguien que
+    # acaba de decir que ese no es su nombre. Es peor que ignorarlo.
+    from src.agentes.estados import nombre_negado
+
+    for texto in ["no me llamo Milagros", "no me llamo milagros",
+                  "mi nombre no es Milagros", "yo no soy Milagros"]:
+        chequear(f"«{texto}» se detecta como negación",
+                 nombre_negado(texto, "Milagros"))
+
+    # Y lo que NO puede tomar por negación, o se rompe la corrección normal.
+    for texto, nom in [("me llamo Matías", "Matías"),
+                       ("no me llamo Milagros, me llamo Matías", "Matías"),
+                       ("soy Matías", "Matías")]:
+        chequear(f"«{texto}» NO es negación de {nom}",
+                 not nombre_negado(texto, nom))
+
+    r = await avanzar(Estado.APERTURA, Intencion.DAR_NOMBRE, "Milagros",
+                      texto="no me llamo Milagros")
+    chequear("negar sin decir el nuevo NO guarda el negado",
+             r.get("nombre") != "Milagros", f"nombre={r.get('nombre')!r}")
+    chequear("y pregunta cómo se llama", r.get("_plantilla") == "que_nombre",
+             f"→ {r.get('_plantilla')!r}")
+    # SIN mover el paso: desde la apertura, el siguiente es el resumen, y el
+    # resumen sin nada elegido revienta. Corregir el nombre no es reservar.
+    chequear("sin moverlo de paso", not r.get("estado"), f"estado={r.get('estado')!r}")
 
     # De punta a punta: el saludo tiene que usar el nombre NUEVO, no el que
     # traía la config. Sin esto se corrige por dentro y se sigue saludando mal.

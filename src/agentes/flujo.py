@@ -47,6 +47,7 @@ from src.agentes.estados import (
     anterior,
     afirmacion_sobre_lo_unico,
     dice_que_pago,
+    nombre_negado,
     nombre_propio,
     numero_elegido,
     opcion_por_nombre,
@@ -646,6 +647,19 @@ async def avanzar(conv: Conversacion, config) -> dict:
     if (intent == Intencion.DAR_NOMBRE
             and estado not in (Estado.ESPERANDO_NOMBRE, Estado.ESPERANDO_CONFIRMACION)):
         limpio = limpiar_nombre(ent.get("nombre") or "")
+
+        # "no me llamo Milagros", a secas. El modelo extrae "Milagros" —el
+        # único nombre de la frase— y sin esta guarda el bot contestaría
+        # "Listo, te anoto como Milagros" a quien acaba de decir que NO se
+        # llama así. Se le pregunta cómo se llama, que es lo que falta.
+        if limpio and nombre_negado(conv["mensaje"], limpio):
+            logger.info("niega el nombre %s sin dar el nuevo: lo pregunto", limpio)
+            # Se pregunta SIN mover el paso. Mandarlo a ESPERANDO_NOMBRE parece
+            # lo natural y rompe: desde la apertura, el paso siguiente es el
+            # resumen, y el resumen sin servicio ni día elegidos revienta.
+            # Quien corrige su nombre no está reservando; está corrigiendo.
+            return {"_plantilla": "que_nombre", "sin_entender": 0}
+
         # Un nombre de una letra no pisa el que ya está: perder la identidad
         # por una clasificación dudosa es peor que no poder corregirla.
         if len(limpio) >= 2:
@@ -1168,6 +1182,9 @@ async def responder(conv: Conversacion, config) -> dict:
         return {"respuesta": P.pedir_senia(datos["monto"], datos["link"],
                                            datos.get("minutos")),
                 "opciones": []}
+
+    if especial == "que_nombre":
+        return {"respuesta": P.que_nombre(), "opciones": []}
 
     if especial == "nombre_corregido":
         # El acuse va pegado al pedido del paso: la persona corrigió su nombre
