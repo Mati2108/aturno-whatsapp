@@ -362,6 +362,19 @@ def resumen(servicio: str, staff: str | None, dia: date, hora,
     return "\n".join(lineas)
 
 
+def nombre_actualizado(nombre: str) -> str:
+    """Acusa recibo de una corrección de nombre, en una línea.
+
+    Sin esto, corregirse se sentía igual que ser ignorado: el bot actualizaba
+    por dentro y volvía a mostrar el paso, sin una palabra que dijera que
+    escuchó. Quien acaba de decir "no me llamo así" necesita ver que cambió.
+
+    Va antes del pedido del paso, no en un mensaje aparte: el paso se manda
+    igual, así que reconocerlo sale gratis.
+    """
+    return f"Listo, te anoto como {nombre}."
+
+
 def pedir_nombre() -> str:
     return "Para cerrarlo necesito tu nombre y apellido."
 

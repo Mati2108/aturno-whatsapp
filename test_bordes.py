@@ -419,6 +419,53 @@ async def t15_el_nombre_no_gasta_modelo():
              s["respuesta"].splitlines()[0][:40])
 
 
+async def t18_se_puede_corregir_el_nombre():
+    print(f"\n{NEGRITA}[18] «NO ME LLAMO MILAGROS, ME LLAMO MATÍAS»{FIN}")
+    print(f"{GRIS}  Sacó turno para la madre y el bot lo saludó así para siempre.{FIN}")
+
+    F.configurar(AturnoDoble())
+
+    async def avanzar(estado: Estado, intent: Intencion, nombre: str | None = None):
+        conv = {"mensaje": "no me llamo Milagros, me llamo Matías",
+                "estado": estado.value, "intent": intent.value,
+                "entidades": {"nombre": nombre} if nombre else {}}
+        return await F.avanzar(conv, _cfg("t18", "Milagros"))
+
+    # El clasificador ya devuelve dar_nombre + "Matías" para estas frases —
+    # está medido. Lo que faltaba era que el flujo hiciera algo con eso.
+    for estado in (Estado.APERTURA, Estado.ESPERANDO_SERVICIO, Estado.ESPERANDO_DIA):
+        r = await avanzar(estado, Intencion.DAR_NOMBRE, "Matías")
+        chequear(f"en «{estado.value}» corrige la identidad",
+                 r.get("nombre") == "Matías", f"nombre={r.get('nombre')!r}")
+
+    # Y lo que NO se puede romper: en la confirmación, dar un nombre sigue
+    # significando A NOMBRE DE QUIÉN va ESTE turno, no quién sos vos. Es la
+    # distinción que evita que el padre que reserva para su hija quede
+    # renombrado para siempre.
+    r = await avanzar(Estado.ESPERANDO_CONFIRMACION, Intencion.DAR_NOMBRE, "Sofía")
+    chequear("en la confirmación sigue siendo el nombre DEL TURNO",
+             r.get("nombre_del_turno") == "Sofía" and not r.get("nombre"),
+             f"turno={r.get('nombre_del_turno')!r} identidad={r.get('nombre')!r}")
+
+    # Un nombre basura no pisa el que ya está: perder la identidad por un
+    # "no" mal clasificado es peor que no corregirla nunca.
+    r = await avanzar(Estado.APERTURA, Intencion.DAR_NOMBRE, "a")
+    chequear("un nombre de una letra no pisa nada", not r.get("nombre"),
+             f"nombre={r.get('nombre')!r}")
+
+    # De punta a punta: el saludo tiene que usar el nombre NUEVO, no el que
+    # traía la config. Sin esto se corrige por dentro y se sigue saludando mal.
+    g = F.construir_flujo(MemorySaver())
+    s = await g.ainvoke({"mensaje": "hola"}, _cfg("t18e", "Milagros"))
+    chequear("primero saluda con el viejo", "Milagros" in s["respuesta"])
+
+    s = await g.ainvoke({"mensaje": "me llamo Matías"},
+                        {"configurable": {**_cfg("t18e", "Milagros")["configurable"]}})
+    chequear("y después de corregir, ya no dice Milagros",
+             "Milagros" not in s["respuesta"], s["respuesta"][:46])
+    chequear("y sí dice Matías", "Matías" in s["respuesta"], s["respuesta"][:46])
+
+
 async def t17_ningun_paso_termina_en_el_error_tecnico():
     print(f"\n{NEGRITA}[17] NINGÚN PASO LE MUESTRA UN ERROR TÉCNICO A LA PERSONA{FIN}")
     print(f"{GRIS}  «quiero otro turno» después de reservar devolvía «se me complicó».{FIN}")
@@ -683,6 +730,7 @@ async def main():
     await t15_el_nombre_no_gasta_modelo()
     await t16_el_techo_de_gasto_degrada_sin_romper()
     await t17_ningun_paso_termina_en_el_error_tecnico()
+    await t18_se_puede_corregir_el_nombre()
 
     print(f"\n{'─' * 58}")
     print(f"{VERDE}Todo en verde.{FIN}" if ok else f"{ROJO}Hay bordes rotos.{FIN}")

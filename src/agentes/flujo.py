@@ -626,6 +626,34 @@ async def avanzar(conv: Conversacion, config) -> dict:
         # colgó — justo cuando hace falta la señal contraria.
         return {"sin_entender": fallas, "_plantilla": "no_entendi"}
 
+    # ---- "No me llamo Milagros, me llamo Matías" ----
+    #
+    # El nombre se guarda la primera vez y después el bot saluda con él y
+    # saltea el paso. Eso está bien hasta que la primera reserva fue PARA OTRO:
+    # alguien saca turno para su mamá, escribe "Milagros" en el paso del
+    # nombre, y queda llamándose Milagros para siempre. Pasó de verdad.
+    #
+    # Lo que faltaba no era entender —el clasificador ya devuelve dar_nombre y
+    # extrae "Matías" de "no me llamo Milagros, me llamo Matías", está medido—
+    # sino que el flujo hiciera algo con eso: fuera de los dos pasos que lo
+    # atienden, `dar_nombre` se descartaba.
+    #
+    # ESPERANDO_NOMBRE queda afuera porque ahí ya se atiende, y
+    # ESPERANDO_CONFIRMACION también y a propósito: en el resumen, dar un
+    # nombre significa a nombre de QUIÉN va ESTE turno, no quién sos vos. Esa
+    # distinción es la que evita el bug de enfrente —el padre que reserva para
+    # su hija y queda renombrado—, así que no se toca.
+    if (intent == Intencion.DAR_NOMBRE
+            and estado not in (Estado.ESPERANDO_NOMBRE, Estado.ESPERANDO_CONFIRMACION)):
+        limpio = limpiar_nombre(ent.get("nombre") or "")
+        # Un nombre de una letra no pisa el que ya está: perder la identidad
+        # por una clasificación dudosa es peor que no poder corregirla.
+        if len(limpio) >= 2:
+            logger.info("corrige su nombre: %s", limpio)
+            return {"nombre": limpio, "sin_entender": 0,
+                    "_plantilla": "nombre_corregido",
+                    "_datos": {"nombre": limpio}}
+
     # Primer contacto: SIEMPRE la apertura, sin importar qué haya escrito.
     # Es el requisito de que la puerta de entrada sea siempre la misma; el
     # dato que trajo no se pierde, se interpreta en el mensaje siguiente.
@@ -1141,6 +1169,15 @@ async def responder(conv: Conversacion, config) -> dict:
                                            datos.get("minutos")),
                 "opciones": []}
 
+    if especial == "nombre_corregido":
+        # El acuse va pegado al pedido del paso: la persona corrigió su nombre
+        # a mitad de algo, y tiene que ver que se entendió Y dónde estaba.
+        paso = await _pedir_paso(conv, cfg, negocio, nombre_negocio,
+                                 await _aturno.listar_servicios(negocio))
+        return {"respuesta": P.nombre_actualizado(datos["nombre"]) + "\n\n"
+                             + paso["respuesta"],
+                "opciones": paso.get("opciones", [])}
+
     if especial == "falta_pagar":
         return {"respuesta": P.falta_pagar(), "opciones": []}
 
@@ -1300,7 +1337,12 @@ async def _pedir_paso(conv: Conversacion, cfg: dict, negocio: str,
     estado = Estado(conv.get("estado") or Estado.APERTURA.value)
 
     if estado == Estado.APERTURA:
-        return {"respuesta": P.apertura(nombre_negocio, servicios, cfg.get("nombre_cliente")),
+        # El nombre sale primero de la conversación y después de la config: la
+        # config es una foto tomada al recibir el mensaje, así que una
+        # corrección hecha en ESTE turno todavía no está ahí. Sin esto se
+        # corregía por dentro y se seguía saludando con el nombre viejo.
+        return {"respuesta": P.apertura(nombre_negocio, servicios,
+                                        conv.get("nombre") or cfg.get("nombre_cliente")),
                 "opciones": [s.nombre for s in servicios]}
 
     if estado == Estado.ESPERANDO_SERVICIO:
