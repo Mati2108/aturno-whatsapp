@@ -419,6 +419,66 @@ async def t15_el_nombre_no_gasta_modelo():
              s["respuesta"].splitlines()[0][:40])
 
 
+async def t19_todas_las_formas_de_negar_el_nombre():
+    print(f"\n{NEGRITA}[19] TODAS LAS FORMAS DE DECIR «NO ME LLAMO ASÍ»{FIN}")
+    print(f"{GRIS}  Sin modelo: «no soy milagros» caía en desconocido y mostraba el menú.{FIN}")
+
+    from src.agentes.estados import correccion_de_nombre
+
+    # (frase, ¿niega?, nombre nuevo si lo dijo)
+    CASOS = [
+        # Niega sin decir el nuevo
+        ("no me llamo Milagros",            True, None),
+        ("no me llamo milagros",            True, None),
+        ("no soy Milagros",                 True, None),
+        ("yo no soy Milagros",              True, None),
+        ("mi nombre no es Milagros",        True, None),
+        ("Milagros no es mi nombre",        True, None),
+        ("ese no es mi nombre",             True, None),
+        ("no me llamo así",                 True, None),
+        ("te equivocaste de nombre",        True, None),
+        ("está mal mi nombre",              True, None),
+
+        # Niega Y dice el nuevo, que es lo que más importa
+        ("no me llamo Milagros, me llamo Matías",  True, "Matías"),
+        ("no soy Milagros, soy Matías",            True, "Matías"),
+        ("mi nombre no es Milagros, es Matías",    True, "Matías"),
+        ("me llamo Matías, no Milagros",           True, "Matías"),
+        ("no me llamo Milagros sino Matías",       True, "Matías"),
+
+        # Y lo que NO es una corrección: no puede robarle el mensaje al flujo
+        ("me llamo Matías",                 False, None),
+        ("soy Matías",                      False, None),
+        ("no",                              False, None),
+        ("no quiero ese horario",           False, None),
+        ("no me gusta el jueves",           False, None),
+        ("hola",                            False, None),
+        ("no tengo preferencia",            False, None),
+    ]
+
+    for frase, niega, nuevo in CASOS:
+        r = correccion_de_nombre(frase)
+        esperado = (niega, nuevo) if niega else None
+        obtenido = r if r is None else (r[0], r[1])
+        chequear(f"«{frase[:38]}»", obtenido == esperado, f"→ {obtenido!r}")
+
+    # Y de punta a punta, SIN modelo: no deriva al menú de servicios.
+    F.configurar(AturnoDoble())
+    g = F.construir_flujo(MemorySaver())
+    cfg = _cfg("t19", "Milagros")
+
+    await g.ainvoke({"mensaje": "hola"}, cfg)
+    s = await g.ainvoke({"mensaje": "no soy Milagros"}, cfg)
+    chequear("«no soy Milagros» NO muestra los servicios",
+             "Corte de pelo" not in s["respuesta"], s["respuesta"][:44])
+    chequear("y pregunta el nombre", "llamás" in s["respuesta"], s["respuesta"][:44])
+
+    s = await g.ainvoke({"mensaje": "no me llamo Milagros, me llamo Matías"}, cfg)
+    chequear("y con el nombre adentro, lo toma directo",
+             "Matías" in s["respuesta"] and "Milagros" not in s["respuesta"],
+             s["respuesta"][:44])
+
+
 async def t18_se_puede_corregir_el_nombre():
     print(f"\n{NEGRITA}[18] «NO ME LLAMO MILAGROS, ME LLAMO MATÍAS»{FIN}")
     print(f"{GRIS}  Sacó turno para la madre y el bot lo saludó así para siempre.{FIN}")
@@ -765,6 +825,7 @@ async def main():
     await t16_el_techo_de_gasto_degrada_sin_romper()
     await t17_ningun_paso_termina_en_el_error_tecnico()
     await t18_se_puede_corregir_el_nombre()
+    await t19_todas_las_formas_de_negar_el_nombre()
 
     print(f"\n{'─' * 58}")
     print(f"{VERDE}Todo en verde.{FIN}" if ok else f"{ROJO}Hay bordes rotos.{FIN}")

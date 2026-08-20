@@ -46,6 +46,7 @@ from src.agentes.estados import (
     Intencion,
     anterior,
     afirmacion_sobre_lo_unico,
+    correccion_de_nombre,
     dice_que_pago,
     nombre_negado,
     nombre_propio,
@@ -322,6 +323,24 @@ async def entender(conv: Conversacion, config) -> dict:
             logger.info("«%s» → %s (nombre, sin LLM)", texto[:24], nombre)
             return {**limpio_turno, "intent": Intencion.DAR_NOMBRE.value,
                     "entidades": {"nombre": nombre}}
+
+    # "No me llamo así" — en código, no en el modelo.
+    #
+    # El clasificador no lo agarra parejo, y eso es lo que rompía: "no me llamo
+    # Milagros, me llamo Matías" lo entiende bien, pero "no soy Milagros" cae
+    # en DESCONOCIDO, y de ahí el flujo le tira el menú de servicios encima a
+    # alguien que acaba de decir que lo estamos llamando mal. Dos maneras de
+    # decir exactamente lo mismo terminaban en lugares distintos.
+    #
+    # Va antes que el resto de los atajos porque una corrección de nombre gana
+    # sobre cualquier otra lectura del mensaje, y tiene que seguir funcionando
+    # con el clasificador caído.
+    correccion = correccion_de_nombre(texto)
+    if correccion is not None:
+        niega, nuevo = correccion
+        logger.info("corrección de nombre: niega=%s nuevo=%r (sin LLM)", niega, nuevo)
+        return {**limpio_turno, "intent": Intencion.DAR_NOMBRE.value,
+                "entidades": {"nombre": nuevo} if nuevo else {"_niega_nombre": True}}
 
     # Las frases de siempre ("dale", "me da igual", "hablar con alguien") no
     # necesitan al modelo: significan lo mismo todas las veces. Cada una que se
@@ -652,7 +671,7 @@ async def avanzar(conv: Conversacion, config) -> dict:
         # único nombre de la frase— y sin esta guarda el bot contestaría
         # "Listo, te anoto como Milagros" a quien acaba de decir que NO se
         # llama así. Se le pregunta cómo se llama, que es lo que falta.
-        if limpio and nombre_negado(conv["mensaje"], limpio):
+        if ent.get("_niega_nombre") or (limpio and nombre_negado(conv["mensaje"], limpio)):
             logger.info("niega el nombre %s sin dar el nuevo: lo pregunto", limpio)
             # Se pregunta SIN mover el paso. Mandarlo a ESPERANDO_NOMBRE parece
             # lo natural y rompe: desde la apertura, el paso siguiente es el

@@ -390,6 +390,126 @@ _NEGACIONES = (
 )
 
 
+# Las formas de decir "ese no es mi nombre", sin nombrar cuál. Van sin acentos
+# porque se comparan contra `_normalizar`.
+_NIEGA_SIN_NOMBRE = (
+    "ese no es mi nombre", "esa no soy yo", "ese no soy yo",
+    "no me llamo asi", "no me llamo aci", "te equivocaste de nombre",
+    "esta mal mi nombre", "mi nombre esta mal", "equivocaste el nombre",
+    "no es mi nombre", "mi nombre es otro", "no me digas asi",
+)
+
+# "no me llamo X" — lo que sigue es lo que NO es.
+_NIEGA_CON_NOMBRE = (
+    "no me llamo", "yo no me llamo", "mi nombre no es", "no soy", "yo no soy",
+    "no me digas",
+)
+
+# "…, me llamo X" — lo que sigue SÍ es. Se buscan después de la negación.
+_AFIRMA = ("me llamo", "mi nombre es", "sino", "soy", "es")
+
+
+def correccion_de_nombre(texto: str) -> tuple[bool, str | None] | None:
+    """¿Está diciendo que no se llama así? Y si lo dijo, ¿cómo se llama?
+
+    Devuelve `(True, nombre)` si además dio el nuevo, `(True, None)` si sólo
+    negó, y `None` si el mensaje no es una corrección de nombre.
+
+    POR QUÉ EN CÓDIGO Y NO EN EL CLASIFICADOR
+    Porque el clasificador no lo agarra parejo. Medido: "no me llamo Milagros,
+    me llamo Matías" devuelve `dar_nombre` y extrae bien; pero "no soy
+    Milagros" cae en `desconocido`, y ahí el flujo lo trata como un mensaje que
+    no entendió y le tira el menú de servicios encima a alguien que acaba de
+    decir que lo estamos llamando mal.
+
+    Esa diferencia —que dos maneras de decir lo mismo terminen en lugares
+    distintos— es exactamente lo que este repo resuelve con tablas: previsible,
+    gratis, y sigue andando con el modelo caído.
+
+    CUÁNDO SE RINDE, QUE ES LO QUE LO HACE SEGURO
+    Sólo contesta cuando la negación está pegada a la fórmula del nombre. Un
+    "no" suelto, "no quiero ese horario" o "no tengo preferencia" devuelven
+    `None` y siguen su camino: robarle el mensaje al flujo sería peor que no
+    entender la corrección.
+    """
+    limpio = _normalizar(texto)
+    if not limpio:
+        return None
+
+    # 1. "ese no es mi nombre" y parientes: niega sin nombrar nada.
+    if any(f in limpio for f in _NIEGA_SIN_NOMBRE):
+        return True, None
+
+    # 2. "me llamo Matías, no Milagros" — la corrección va PRIMERO y la
+    #    negación atrás. Es el orden inverso al del resto y hay que mirarlo
+    #    antes, o la negación de la cola se lleva el mensaje.
+    for afirma in ("me llamo", "mi nombre es", "yo soy", "soy"):
+        marca = afirma + " "
+        if not limpio.startswith(marca):
+            continue
+        cola = limpio[len(marca):].split()
+        if not cola or not cola[0].isalpha() or cola[0] in _NO_ES_NOMBRE:
+            break
+        # Sólo cuenta como corrección si DESPUÉS viene un "no" con otro nombre.
+        # Sin eso es un "me llamo X" común y lo resuelve `nombre_propio`.
+        resto = " ".join(cola[1:])
+        if resto.startswith("no ") or " no " in f" {resto}":
+            return True, _mismo_del_original(texto, cola[0])
+        break
+
+    # 2. "no me llamo X" / "no soy X". Hace falta que después venga algo, o es
+    #    un "no" suelto con otra cosa detrás.
+    for negacion in _NIEGA_CON_NOMBRE:
+        marca = negacion + " "
+        pos = limpio.find(marca)
+        if pos == -1:
+            continue
+        resto = limpio[pos + len(marca):].strip()
+        if not resto:
+            continue
+
+        # Lo que sigue tiene que PARECER un nombre. "no soy de acá" o "no me
+        # llamo para pedir turno" no son correcciones.
+        negado = resto.split()[0]
+        if not negado.isalpha() or len(negado) < 2 or negado in _NO_ES_NOMBRE:
+            continue
+
+        # ¿Dijo el correcto en la misma frase? Se busca una fórmula afirmativa
+        # DESPUÉS del nombre negado: "no me llamo Milagros, me llamo Matías".
+        cola = resto[len(negado):]
+        for afirma in _AFIRMA:
+            p = cola.find(afirma + " ")
+            if p == -1:
+                continue
+            candidato = cola[p + len(afirma) + 1:].strip().split()
+            if candidato and candidato[0].isalpha() and candidato[0] not in _NO_ES_NOMBRE:
+                # Se recorta del texto ORIGINAL para no devolver el nombre sin
+                # acentos: `_normalizar` los saca para poder comparar, y
+                # "Matias" no es como se escribe "Matías".
+                nuevo = _mismo_del_original(texto, candidato[0])
+                return True, nuevo
+        return True, None
+
+    # 3. "Milagros no es mi nombre" — la negación va DESPUÉS del nombre.
+    if " no es mi nombre" in limpio:
+        return True, None
+
+    return None
+
+
+def _mismo_del_original(texto: str, normalizada: str) -> str:
+    """La palabra tal cual la escribió la persona, capitalizada.
+
+    Se busca en el original la que normaliza igual, porque devolver "Matias"
+    cuando escribió "Matías" es escribirle mal el nombre en su propio turno.
+    """
+    for palabra in texto.split():
+        limpia = _normalizar(palabra)
+        if limpia == normalizada:
+            return palabra.strip(",.;:").capitalize()
+    return normalizada.capitalize()
+
+
 def nombre_negado(texto: str, nombre: str) -> bool:
     """¿La persona está NEGANDO ese nombre en vez de dárnoslo?
 
