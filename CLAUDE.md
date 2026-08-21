@@ -163,6 +163,7 @@ del proyecto salía en pantalla en cada corrida de la primera y nadie lo vio.
 | [AUDITORIA_BOT.md](AUDITORIA_BOT.md) | Auditoría de comportamiento, caso por caso |
 | [SEGURIDAD.md](SEGURIDAD.md) | Credenciales a rotar antes de un cliente real |
 | [TODO-PANEL.md](TODO-PANEL.md) | Lo que falta del lado de aturno (otro repo) |
+| [ROADMAP.md](ROADMAP.md) | **Empezá acá**: qué está hecho, qué falta, si se puede, y qué puede salir mal |
 | [INVESTIGACION.md](INVESTIGACION.md) | Qué dice la investigación sobre chatbots, y qué le falta a éste |
 | [PLAN.md](PLAN.md) | El plan de mejoras derivado de esa investigación, con bitácora de lo que se encontró |
 
