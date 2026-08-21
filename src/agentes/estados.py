@@ -567,6 +567,31 @@ def dice_que_pago(texto: str) -> bool:
     return limpio in _YA_PAGUE
 
 
+_AGRADECIMIENTOS = (
+    "gracias", "muchas gracias", "mil gracias", "graciass", "grasias",
+    "genial gracias", "dale gracias", "perfecto gracias", "buenisimo gracias",
+    "listo gracias", "ok gracias", "okey gracias", "gracias totales",
+    "te agradezco", "muy amable", "gracias por todo", "gracias de nuevo",
+)
+
+
+def es_agradecimiento(texto: str) -> bool:
+    """¿Está agradeciendo, o está volviendo a saludar? Sin LLM.
+
+    Los dos son SALUDO para el clasificador, y ahí estaba el bucle: después de
+    reservar, "gracias" cierra la conversación con una línea que NO mueve el
+    estado —tiene que no moverlo, porque agradecer no es pedir nada—. Pero un
+    "hola" caía en la misma rama, y como el estado quedaba clavado en
+    CONFIRMADO, el siguiente "hola" también, y el siguiente. La persona leía
+    "cualquier cosa escribime", escribía, y recibía "cualquier cosa escribime".
+
+    Un gracias se puede repetir; un hola, no: quien saluda de nuevo está
+    empezando algo. Por eso se compara la frase entera —el default seguro es
+    False, o sea abrir el flujo— y no por "contiene".
+    """
+    return _normalizar(texto) in _AGRADECIMIENTOS
+
+
 def sin_contenido(texto: str) -> bool:
     """¿El mensaje no tiene ninguna letra ni número que se pueda interpretar?
 

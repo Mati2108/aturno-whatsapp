@@ -48,6 +48,7 @@ from src.agentes.estados import (
     afirmacion_sobre_lo_unico,
     correccion_de_nombre,
     dice_que_pago,
+    es_agradecimiento,
     nombre_negado,
     nombre_propio,
     numero_elegido,
@@ -445,12 +446,27 @@ async def avanzar(conv: Conversacion, config) -> dict:
                 "opciones": [], "desde_horario": 0, "sin_entender": 0,
                 "_plantilla": "sesion_reiniciada"}
 
-    # Un gracias o un saludo después de reservar es un cierre, no un pedido
-    # nuevo. Sin esta rama caía en la apertura de más abajo y la persona
-    # recibía el saludo entero con la lista de servicios y un "¿querés sacar un
-    # turno?", que es contestarle algo que no preguntó justo después de haberle
-    # contestado lo que sí.
-    if estado == Estado.CONFIRMADO and intent == Intencion.SALUDO:
+    # Un gracias después de reservar es un cierre, no un pedido nuevo. Sin esta
+    # rama caía en la apertura de más abajo y la persona recibía el saludo
+    # entero con la lista de servicios y un "¿querés sacar un turno?", que es
+    # contestarle algo que no preguntó justo después de haberle contestado lo
+    # que sí.
+    #
+    # PERO SÓLO UN GRACIAS. El clasificador mete "hola" y "gracias" en la misma
+    # intención, y esta rama contesta SIN mover el estado —tiene que no
+    # moverlo: agradecer no pide nada—. Con "hola" adentro, CONFIRMADO no se
+    # soltaba nunca y todo saludo posterior devolvía la misma línea:
+    #
+    #     👤 gracias  🤖 De nada. Cualquier cosa escribime y lo vemos.
+    #     👤 hola     🤖 De nada. Cualquier cosa escribime y lo vemos.
+    #     👤 hola     🤖 De nada. Cualquier cosa escribime y lo vemos.   (…)
+    #
+    # Un cierre que invita a escribir y contesta lo mismo a lo que escribís es
+    # un callejón, y encima uno que se dispara solo: "hola" es exactamente lo
+    # que escribe quien vuelve. Quien vuelve empieza de nuevo, así que cae en
+    # el reinicio de CONFIRMADO de más abajo y ve la apertura.
+    if (estado == Estado.CONFIRMADO and intent == Intencion.SALUDO
+            and es_agradecimiento(conv["mensaje"])):
         return {"_plantilla": "de_nada"}
 
     # ---- Esperando la seña: cualquier mensaje es una segunda oportunidad ----

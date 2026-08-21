@@ -188,8 +188,29 @@ async def t6_gracias_no_es_un_pedido_nuevo(g):
              s["respuesta"][:50])
     chequear("y el turno sigue confirmado", s["estado"] == Estado.CONFIRMADO.value)
 
+    # Un segundo gracias sigue siendo un gracias. Puede repetirse.
+    s = await g.ainvoke({"mensaje": "muchas gracias"}, _cfg("t6", "Ana Pérez"))
+    chequear("agradecer dos veces sigue cerrando", "De nada" in s["respuesta"])
+
+    # Pero un HOLA no es un gracias: es alguien que vuelve.
+    #
+    # Acá estaba el bucle. "hola" y "gracias" comparten intención —SALUDO— y
+    # esta rama contestaba el cierre a las dos SIN mover el estado, así que
+    # CONFIRMADO no se soltaba nunca: todo saludo posterior devolvía la misma
+    # línea, incluida la que invita a escribir. La persona escribía, y recibía
+    # otra vez "escribime". Para siempre.
+    s = await g.ainvoke({"mensaje": "hola"}, _cfg("t6", "Ana Pérez"))
+    chequear("saludar después del cierre NO repite el cierre",
+             "De nada" not in s["respuesta"], s["respuesta"][:60])
+    chequear("saluda de vuelta y muestra qué se puede hacer",
+             "Soy el asistente" in s["respuesta"])
+    chequear("y suelta el estado confirmado",
+             s["estado"] != Estado.CONFIRMADO.value, f"estado={s['estado']}")
+
     # Pero pedir algo de verdad sí arranca un pedido nuevo.
-    s = await g.ainvoke({"mensaje": "quiero otro turno"}, _cfg("t6", "Ana Pérez"))
+    await hasta_el_resumen(g, "t6b")
+    await g.ainvoke({"mensaje": "sí"}, _cfg("t6b", "Ana Pérez"))
+    s = await g.ainvoke({"mensaje": "quiero otro turno"}, _cfg("t6b", "Ana Pérez"))
     chequear("un pedido nuevo sí reabre el flujo",
              s["estado"] != Estado.CONFIRMADO.value, f"estado={s['estado']}")
 
