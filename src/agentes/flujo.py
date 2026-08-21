@@ -1257,11 +1257,27 @@ async def responder(conv: Conversacion, config) -> dict:
         return {"respuesta": P.atascado(_link_del_negocio(negocio)), "opciones": []}
 
     if especial == "no_entendi":
-        # El pedido del paso, con una línea adelante que reconoce que no se
-        # entendió. Repetir el texto idéntico se lee como que el bot se colgó.
+        # El pedido del paso, con una línea adelante que reconoce QUÉ se
+        # entendió. Repetir el texto idéntico se lee como que el bot se colgó,
+        # y además es la estrategia de reparación peor puntuada de las ocho que
+        # comparó Ashktorab et al. (CHI 2019): ganaron explicar y ofrecer.
+        #
+        # La pista se calcula sobre las entidades de ESTE mensaje —`entender`
+        # las reescribe en cada turno— y `pista_de` se guarda de todo lo demás:
+        # sólo refleja datos que parsean, y se calla ante una frase que niega.
+        #
+        # No cuesta una llamada más al modelo: las entidades ya vinieron en la
+        # misma clasificación que devolvió DESCONOCIDO.
         paso = await _pedir_paso(conv, cfg, negocio, nombre_negocio,
                                  await _aturno.listar_servicios(negocio))
-        return {"respuesta": P.no_entendi(paso["respuesta"]),
+        return {"respuesta": P.no_entendi(
+                    paso["respuesta"],
+                    pista=P.pista_de(conv.get("entidades"), conv.get("mensaje", "")),
+                    # La salida a una persona desde el SEGUNDO tropiezo. Que
+                    # exista es lo que el 87% de los clientes considera
+                    # esencial; ponerla ya en el primero alarga cada fallo con
+                    # una oferta que todavía no hace falta.
+                    ofrecer_persona=int(conv.get("sin_entender") or 0) >= 2),
                 "opciones": paso.get("opciones", [])}
 
     if especial == "sesion_reiniciada":

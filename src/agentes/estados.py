@@ -592,6 +592,29 @@ def es_agradecimiento(texto: str) -> bool:
     return _normalizar(texto) in _AGRADECIMIENTOS
 
 
+# Palabras que dan vuelta el sentido de la frase entera.
+#
+# Se comparan como PALABRA SUELTA, no por "contiene": "nomás" empieza con "no"
+# y "tampoco" contiene "poco". Un chequeo por substring acá silenciaría la
+# pista en media conversación.
+_NIEGA = frozenset({"no", "nunca", "tampoco", "jamas", "ninguno", "ninguna",
+                    "nada", "salvo", "menos", "excepto"})
+
+
+def hay_negacion(texto: str) -> bool:
+    """¿La frase niega algo? Sin LLM.
+
+    Existe por un caso concreto: "no quiero el jueves" trae `fecha=jueves` en
+    las entidades igual que "quiero el jueves". Repetirle a esa persona
+    "entendí que querés algo para el jueves" es decirle exactamente lo
+    contrario de lo que dijo, con cara de haberla entendido.
+
+    Ante la duda se calla. Perder una pista cuesta un mensaje algo más seco;
+    afirmar lo contrario de lo que alguien dijo cuesta la confianza.
+    """
+    return bool(_NIEGA & set(_normalizar(texto or "").split()))
+
+
 def sin_contenido(texto: str) -> bool:
     """¿El mensaje no tiene ninguna letra ni número que se pueda interpretar?
 

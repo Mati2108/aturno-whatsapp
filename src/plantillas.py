@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from src.agentes.estados import hay_negacion
 from src.fechas import hoy as hoy_del_negocio
 
 from src.schemas import (
@@ -907,9 +908,92 @@ def sin_dato() -> str:
     )
 
 
-def no_entendi(reintento: str) -> str:
-    """Repite el CTA del estado actual en vez de dejar a la persona colgada."""
-    return "\n".join(["No te entendí.", "", reintento])
+# Los campos de `Entidades` que se pueden REPETIRLE a la persona, y por qué
+# sólo esos dos.
+#
+# `fecha` y `hora` no son texto: son formatos. Una fecha que parsea a `date` es
+# una fecha, la haya sacado el modelo de donde sea. Los otros cuatro campos
+# —servicio, profesional, nombre, consulta— son prosa que escribió el LLM, y
+# devolvérsela a la persona bajo el rótulo "entendí que…" sería presentarle una
+# alucinación como comprensión.
+#
+# Es la misma frontera que sostiene todo el módulo: acá no se imprime nada que
+# haya redactado un modelo.
+def pista_de(entidades: dict | None, mensaje: str = "") -> str | None:
+    """Lo que SÍ se entendió del mensaje, en palabras. O nada.
+
+    El primer escalón de la reparación cuando el bot no entiende. Antes era
+    repetir el pedido idéntico —la estrategia peor puntuada de las ocho que
+    comparó Ashktorab et al. (CHI 2019)—; nombrar lo que sí llegó y ofrecer las
+    opciones fueron las dos que ganaron, porque muestran iniciativa y son
+    accionables.
+
+    Devuelve `None` mucho más seguido de lo que devuelve texto, y eso es
+    correcto: el default seguro es callarse. Arriesgar una pista de más es
+    convertir "no te entendí" en "te entendí mal y te lo afirmo", que es peor.
+    """
+    ent = entidades or {}
+
+    # Una frase que niega da vuelta el sentido de sus propias entidades:
+    # "no quiero el jueves" trae `fecha=jueves` igual que "quiero el jueves".
+    # Sin esto, el bot le contestaría "entendí que querés algo para el jueves"
+    # a alguien que acaba de decir que el jueves no.
+    if hay_negacion(mensaje):
+        return None
+
+    partes = []
+    fecha = _fecha_si_parsea(ent.get("fecha"))
+    if fecha:
+        partes.append(f"para el {_dia_corto(fecha)}")
+    hora = _hora_si_parsea(ent.get("hora"))
+    if hora:
+        partes.append(f"a las {hora}")
+
+    return " ".join(partes) if partes else None
+
+
+def _fecha_si_parsea(valor) -> date | None:
+    """'2026-08-27' -> date. 'el jueves que viene' -> None."""
+    try:
+        return date.fromisoformat(valor)
+    except (TypeError, ValueError):
+        return None
+
+
+def _hora_si_parsea(valor) -> str | None:
+    """'15:30' -> '15:30'. '25:99' -> None."""
+    try:
+        h, m = str(valor).split(":")
+        if 0 <= int(h) <= 23 and 0 <= int(m) <= 59:
+            return f"{int(h):02d}:{int(m):02d}"
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return None
+
+
+def no_entendi(reintento: str, pista: str | None = None,
+               ofrecer_persona: bool = False) -> str:
+    """No se entendió. Se dice qué SÍ llegó, se ofrecen las opciones, y a la
+    segunda se nombra la salida.
+
+    Los tres bloques salen de la investigación, en ese orden:
+
+      · La EXPLICACIÓN —qué se entendió— y las OPCIONES son las dos estrategias
+        de reparación que la gente prefiere. Sin pista queda "No te entendí",
+        que es la vieja y la peor, pero es la única honesta cuando de verdad no
+        llegó nada.
+      · La SALIDA a una persona recién al segundo fallo. Que exista es
+        obligatorio —87% de los clientes la considera esencial (Gartner, ago
+        2026)— y el momento en que más se busca es después de un fallo. Pero
+        ponerla ya en el primero alarga cada tropiezo con una oferta que
+        todavía no hace falta.
+    """
+    apertura_ = f"Entendí que querés algo {pista}." if pista else "No te entendí."
+    lineas = [apertura_, "", reintento]
+    if ofrecer_persona:
+        lineas += ["", "Si preferís, escribime «una persona» y te contesta "
+                       "alguien del local."]
+    return "\n".join(lineas)
 
 
 def respuesta_info(texto: str) -> str:

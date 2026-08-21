@@ -825,6 +825,111 @@ async def t9_el_borde_del_webhook():
     chequear("el tope es por teléfono, no global", atender)
 
 
+async def t20_al_fallar_dice_que_si_entendio(g):
+    """El primer escalón de la reparación: explicar + ofrecer, no repetir.
+
+    CHI 2019 (Ashktorab et al., N=203) comparó ocho estrategias de reparación:
+    ganaron las OPCIONES y las EXPLICACIONES —muestran iniciativa y son
+    accionables— y REPETIR quedó abajo. Hoy el primer escalón de este bot es
+    repetir el pedido idéntico, sin una palabra de lo que sí llegó.
+
+    El riesgo de arreglarlo mal es peor que el bug: si el bot AFIRMA haber
+    entendido algo que no entendió, pasa de "no entiende" a "miente", que es
+    el pecado que la literatura llama sobreestimar capacidades. Por eso la
+    mitad de los casos de acá son negativos: qué NO se puede reflejar nunca.
+    """
+    print(f"\n{NEGRITA}[20] AL FALLAR, DICE QUÉ SÍ ENTENDIÓ{FIN}")
+    print(f"{GRIS}  Explicar + ofrecer le gana a repetir. Pero sin inventar.{FIN}")
+
+    manana = (dt.date.today() + dt.timedelta(days=1)).isoformat()
+
+    # ---- Lo único que se puede reflejar: datos que parsean ----
+    pista = P.pista_de({"fecha": manana})
+    chequear("una fecha válida se refleja en palabras", bool(pista), repr(pista))
+    chequear("y con el día en castellano, no en ISO",
+             pista is not None and manana not in pista, repr(pista))
+
+    pista_hora = P.pista_de({"hora": "15:30"})
+    chequear("una hora válida también", pista_hora is not None and "15:30" in pista_hora,
+             repr(pista_hora))
+
+    # ---- Lo que NUNCA se refleja: texto libre del modelo ----
+    #
+    # `servicio`, `profesional`, `nombre` y `consulta` son prosa del modelo. Si
+    # se devolvieran acá, el bot repetiría al usuario lo que el LLM alucinó y
+    # lo presentaría como "lo que entendí".
+    for campo in ("servicio", "profesional", "nombre", "consulta"):
+        chequear(f"«{campo}» NO se refleja (es prosa del modelo)",
+                 P.pista_de({campo: "cualquier cosa"}) is None)
+
+    chequear("sin entidades no hay pista", P.pista_de({}) is None)
+    chequear("ni con entidades en None", P.pista_de({"fecha": None}) is None)
+    chequear("una fecha que no parsea no se refleja",
+             P.pista_de({"fecha": "el jueves que viene"}) is None)
+    chequear("una hora imposible tampoco", P.pista_de({"hora": "25:99"}) is None)
+
+    # ---- Y la baranda que apareció escribiendo esto ----
+    #
+    # "no quiero el jueves" trae `fecha=jueves` EXACTAMENTE IGUAL que "quiero
+    # el jueves": el clasificador extrae la entidad, no el signo. Sin este
+    # chequeo el bot le contestaba "entendí que querés algo para el jueves" a
+    # alguien que acababa de decir que el jueves no — y con cara de haberlo
+    # entendido, que es peor que no entender.
+    for niega in ("no quiero el jueves", "el jueves no", "no, ese día no",
+                  "cualquiera menos el jueves", "nunca los jueves",
+                  "tampoco el jueves"):
+        chequear(f"«{niega}» no genera pista",
+                 P.pista_de({"fecha": manana}, niega) is None)
+
+    # Pero una frase normal con la misma entidad sí.
+    chequear("«quiero algo para mañana» sí genera pista",
+             P.pista_de({"fecha": manana}, "quiero algo para mañana") is not None)
+    chequear("y «nomás» no cuenta como negación (no es «no»)",
+             P.pista_de({"fecha": manana}, "para mañana nomas") is not None)
+
+    # ---- Y de punta a punta, en el flujo ----
+    #
+    # Se llama a `avanzar` directo con la clasificación ya puesta: es la única
+    # forma de probar esto sin LLM, y lo que se está probando es la rama del
+    # flujo, no el clasificador.
+    conv = {"mensaje": "quiero algo para mañana", "estado": Estado.ESPERANDO_SERVICIO.value,
+            "intent": Intencion.DESCONOCIDO.value, "entidades": {"fecha": manana},
+            "opciones": [], "sin_entender": 0}
+    cambios = await F.avanzar(conv, _cfg("t20"))
+    salida = await F.responder({**conv, **cambios}, _cfg("t20"))
+    texto = salida["respuesta"]
+
+    chequear("el bot nombra lo que sí entendió", "Entendí" in texto, texto[:70])
+    chequear("y ofrece las opciones igual", "1." in texto and "Corte" in texto)
+    chequear("sin decir que no entendió nada", "No te entendí" not in texto)
+
+    # Basura no produce pista. Es la baranda que evita el bot mentiroso.
+    for basura in ("!!!!", "...", "🙂🙂"):
+        conv_b = {"mensaje": basura, "estado": Estado.ESPERANDO_SERVICIO.value,
+                  "intent": Intencion.DESCONOCIDO.value, "entidades": {},
+                  "opciones": [], "sin_entender": 0}
+        c = await F.avanzar(conv_b, _cfg("t20b"))
+        s = await F.responder({**conv_b, **c}, _cfg("t20b"))
+        chequear(f"«{basura}» no inventa una pista", "Entendí" not in s["respuesta"])
+
+    # ---- Y la salida a una persona, a partir del segundo fallo ----
+    #
+    # 87% de los clientes dice que es esencial poder llegar a un humano
+    # (Gartner, ago 2026), y el momento en que más se busca es justo después de
+    # un fallo. Al primero no va: alarga el mensaje sin motivo.
+    conv_1 = {"mensaje": "asdasd", "estado": Estado.ESPERANDO_SERVICIO.value,
+              "intent": Intencion.DESCONOCIDO.value, "entidades": {},
+              "opciones": [], "sin_entender": 0}
+    s1 = await F.responder({**conv_1, **await F.avanzar(conv_1, _cfg("t20c"))}, _cfg("t20c"))
+    chequear("al primer fallo NO alarga con la salida",
+             "una persona" not in s1["respuesta"])
+
+    conv_2 = {**conv_1, "sin_entender": 1}
+    s2 = await F.responder({**conv_2, **await F.avanzar(conv_2, _cfg("t20c"))}, _cfg("t20c"))
+    chequear("al segundo fallo sí nombra «una persona»",
+             "una persona" in s2["respuesta"], s2["respuesta"][-60:])
+
+
 async def main():
     doble = AturnoDoble()
     F.configurar(doble)
@@ -847,6 +952,7 @@ async def main():
     await t17_ningun_paso_termina_en_el_error_tecnico()
     await t18_se_puede_corregir_el_nombre()
     await t19_todas_las_formas_de_negar_el_nombre()
+    await t20_al_fallar_dice_que_si_entendio(g)
 
     print(f"\n{'─' * 58}")
     print(f"{VERDE}Todo en verde.{FIN}" if ok else f"{ROJO}Hay bordes rotos.{FIN}")
@@ -855,3 +961,4 @@ async def main():
 
 if __name__ == "__main__":
     raise SystemExit(asyncio.run(main()))
+
