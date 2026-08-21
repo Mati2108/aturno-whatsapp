@@ -25,6 +25,7 @@ python test_ataques.py        # inyección, fuga, abuso de flujo, costo
 python test_demora.py         # aviso de demora y techo de tiempo
 python test_conocimiento.py   # lo que carga el panel sobrevive un reinicio (usa embeddings reales)
 python test_metricas.py       # el instrumento de /metricas, calibrado contra un patrón conocido
+python test_redaccion.py      # el guardián: qué puede salir al aire y qué no (sin LLM)
 python test_observabilidad.py # 5 escenarios trazados (necesita `phoenix serve` + PHOENIX_HABILITADO=true)
 python todos_los_caminos.py   # recorre las bifurcaciones e imprime lo que ve la persona
 ```
@@ -128,6 +129,7 @@ son semilla de desarrollo, no el estado real.
 
 ```bash
 python test_clasificador.py   # 56 casos contra `casos.jsonl`. NO es gratis (~0,08 USD)
+python probar_invencion.py    # 18 preguntas que empujan al modelo a inventar (~0,01 USD)
 ```
 
 Es el único que llama al modelo, así que **no va en el tablero de siempre**: se

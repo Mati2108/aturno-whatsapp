@@ -583,3 +583,127 @@ Los cuatro pasos del plan están hechos. Lo que sigue no es de este plan:
   ventana de 24 h. Se puede hacer y probar con Twilio, sin cuenta de Meta.
 - **La deuda del clasificador** — las frases con "no" que caen en `rechazar`.
 - **Esperando a Meta** — Embedded Signup, plantillas, envío real.
+
+---
+
+# Bloque 1 · Que no suene a robot — hecho
+
+Cinco pasos, cinco commits. El bot contesta la pregunta que le hicieron en vez
+de volcar la ficha del negocio, y nada sale al aire sin pasar por un guardián.
+
+## El antes y el después
+
+```
+👤 abren los sábados?
+
+ANTES  🤖 Lunes a viernes de 9:00 a 18:00. Sábados de 9:00 a 13:00.
+          Domingos y feriados permanecemos cerrados.
+
+AHORA  🤖 Sí, abrimos los sábados de 9:00 a 13:00.
+```
+
+```
+👤 cuánto sale el corte?
+
+ANTES  🤖 Corte de pelo: 30 minutos, $8.000        ← un renglón de base de datos
+AHORA  🤖 El corte de pelo sale $8.000 y tarda 30 minutos.
+```
+
+```
+👤 hacen depilación láser?          (el negocio no cargó esa respuesta)
+
+ANTES  🤖 Ese dato no lo tengo cargado. ¿Querés que te saque un turno?
+
+AHORA  🤖 Ese dato no lo tengo cargado y no quiero mandarte cualquier cosa.
+
+          De lo que sí te puedo contar:
+          · Servicios y precios      · Formas de pago
+          · Horarios de atención     · Dónde estamos y cómo llegar
+          · Cómo sacar y cancelar un turno
+```
+
+## La decisión que sostiene todo
+
+**El guardián se escribió y se probó ANTES que la redacción.** Un guardián
+escrito después termina ajustado para dejar pasar lo que el modelo ya produce, y
+ahí deja de guardar nada.
+
+Al terminar el paso 2 el guardián existía, atrapaba las 22 invenciones de
+`casos_invencion.jsonl` y no frenaba ninguna de las 8 respuestas legítimas —
+**y todavía no había nadie que redactara**.
+
+## Los números
+
+| | |
+|---|---|
+| Preguntas normales redactadas | **13 de 15** · rechazo **13%** (techo 30%) |
+| Preguntas adversarias frenadas | **13 de 18** · rechazo **72%** |
+| **Invenciones que se escaparon** | **0 de 18** |
+| Costo por pregunta redactada | **0,00047 USD** — 4× más barato que clasificar |
+| Costo por turno | **0,00181 USD, sin cambios** |
+| Llamadas al modelo en el camino «no tengo el dato» | **0** |
+
+El contraste 13% / 72% es lo que dice que el guardián **discrimina** en vez de
+rechazar al azar: frena lo que hay que frenar y deja pasar lo que hay que dejar.
+
+## Lo que salió distinto del plan
+
+**El paso 3 no necesitó modelo.** Estaba planeado que el modelo *eligiera* una
+sección adyacente con salida estructurada. Escribiéndolo apareció algo mejor:
+los títulos de las secciones son los `##` que cargó el negocio y salen del
+índice con un filtro por metadato — sin embeddings, sin modelo, sin costo, y sin
+posibilidad de nombrar un tema que no exista.
+
+**Apareció una puerta que no estaba en el plan.** Con DOS fragmentos del RAG, la
+fuente son dos respuestas a dos preguntas distintas pegadas, y una reescritura
+las puede fundir en algo que no dice ninguna —"el corte se paga en efectivo"—
+con todas las palabras viniendo de la fuente. `verificar` no lo vería. Por eso
+sólo se redacta con un fragmento.
+
+## Lo que encontró la medición
+
+**El guardián frenó una respuesta que suena impecable:**
+
+```
+👤 puedo pagar con Mercado Pago?
+🤖 (el modelo escribió) "No aceptamos Mercado Pago. Las formas de pago
+    disponibles son efectivo, transferencia y tarjeta de débito."
+```
+
+Se lee perfecto y **es una afirmación sin respaldo**: la fuente no dice que no lo
+acepten, simplemente no lo menciona. Negar algo que no está es inventar igual
+que afirmarlo.
+
+**Y frenó tres respuestas correctas por sinónimos** —«tarda», «local»,
+«sirven»—. Los tres entraron a `casos_invencion.jsonl` con su caso.
+
+## El desgaste que hay que vigilar
+
+La regla del vocabulario se apoya en una lista de verbos que **no está completa
+ni puede estarlo**. Con un negocio nuevo van a aparecer verbos nuevos, y cada
+uno frena una respuesta correcta.
+
+Lo que lo hace sostenible: frenar de más no rompe nada (sale el texto literal),
+cada rechazo se loguea con la palabra exacta, y el porcentaje se mide. **Si el
+rechazo sube mucho, la función está degradada aunque nada esté "roto"** — ese es
+el momento de revisarla.
+
+La regla que no se negocia: **nunca se agrega un sustantivo a esa lista.** Los
+verbos son la forma de decir algo; los sustantivos son la cosa dicha, y ahí es
+donde vive la invención.
+
+## Lo que este guardián no puede atrapar
+
+Una verificación léxica no entiende el sentido. La regla de negación cubre la
+forma frecuente ("no aceptamos X" → "sí, X"), no todas las formas posibles.
+
+Las 18 preguntas adversarias no encontraron ninguna, pero 18 no es una prueba:
+es la evidencia que hay. `probar_invencion.py` está para volver a correrla con
+preguntas nuevas cada vez que haya una duda.
+
+## Encontrado de paso, sin arreglar
+
+**El RAG no encuentra la sección de pagos con «aceptan tarjeta?»** — devuelve
+cero fragmentos teniendo la respuesta cargada. Es un problema de relevancia
+anterior a este bloque: `datos/demo-peluqueria.md` no tiene las líneas `>` con
+las preguntas que el panel escribe para que la búsqueda enganche. Anotado.
