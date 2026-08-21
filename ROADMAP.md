@@ -7,6 +7,27 @@ salir mal.** Los otros documentos son el detalle; éste es el mapa.
 
 ---
 
+# El puntaje, y qué lo mueve
+
+| | Hoy | Alcanzable | Con qué |
+|---|---|---|---|
+| **Cómo conversa** | **8** | 9 | Tarea 6 · sacar el turno en un mensaje |
+| **Cuánto sabemos que funciona** | **5** | 8 | Tarea 7 · medir de verdad |
+| **Confiabilidad técnica** | **7** | 9 | Tarea 8 · probar lo que nunca se probó |
+| **Producto vendible** | **3** | 6 | Tarea 3 · varios negocios *(el resto es trámite)* |
+
+**Por qué «cuánto sabemos» no llega a 9 sin usuarios reales.** Todo lo medido
+hasta hoy lo escribí yo: mis 49 caminos, mis 56 casos, mis 18 trampas. Es una
+medición de qué tan bien el bot resiste MIS ideas de cómo habla la gente. El
+último punto lo ponen tres personas de verdad escribiéndole media hora.
+
+**Por qué «vendible» no llega más allá de 6 con código.** El número de Twilio
+obliga a cada persona a mandar un código de «join» antes de poder escribir — no
+se le puede dar a un negocio. Eso se resuelve con Meta, y Meta con el
+monotributo.
+
+---
+
 # Dónde estamos hoy
 
 Todo esto es medible y se puede volver a medir con un comando.
@@ -192,6 +213,56 @@ modelo haga más: **el clasificador ya extrae todo eso y el flujo lo tira.**
 | Sentirse atropellado | Cubierto: el resumen muestra todo y «cambiar el día» funciona |
 | **Un error del clasificador ahora mueve la conversación** | **Nuevo.** Hoy una fecha mal extraída se descarta; con esto, desvía. Por eso la 6.1 va primero |
 
+## Tarea 7 · Saber que funciona, no creerlo
+
+Los instrumentos están puestos y marcan todo en cero porque nadie los usó.
+Esto es lo que se puede medir **sin usuarios reales**.
+
+- [ ] **7.1 · Medir el buscador.** ¿Encuentra lo que el negocio tiene cargado?
+      Hoy no lo sé. Necesita el reindexado de la tarea 1. *(Quedó corriendo en
+      segundo plano el 21/8 — verificar si entró antes de rehacerlo.)*
+- [ ] **7.2 · Medir la extracción de DATOS.** Está medido cuánto acierta
+      entendiendo *qué* querés (92,9%). No está medido cuánto acierta sacando
+      *la fecha, el servicio, la hora*. **Es el número que decide si la tarea 6
+      es segura**, así que va antes que ella.
+- [ ] **7.3 · El simulador de clientes.** La pieza grande.
+
+### Sobre el simulador (7.3)
+
+Se le pide a un modelo que **actúe de cliente**: con apuro, con dudas,
+escribiendo mal, en argentino, cambiando de idea a mitad. Genera ~50
+conversaciones distintas, se corren enteras contra el bot, y se mide:
+
+| | |
+|---|---|
+| cuántas terminan en un turno | *goal completion* |
+| en cuántos mensajes | los benchmarks dicen que menos es mejor, siempre |
+| cuántas se traban en «no te entendí» | |
+| cuántas piden un humano | *escalation rate* |
+
+**Por qué importa más que todo lo demás que medí**: rompe el límite de que las
+pruebas las escriba la misma persona que escribió el código. No es un usuario
+real —sigue siendo un modelo imaginando gente— pero es lo más cerca que se
+llega sin usuarios, y **sale un número que se le puede mostrar a un negocio**:
+«de 50 conversaciones, 43 terminan en turno».
+
+Cuesta plata: ~50 conversaciones × varios mensajes cada una. Se mide antes.
+
+## Tarea 8 · Confiabilidad: probar lo que nunca se probó
+
+Tres huecos. Ninguno se rompió todavía; ninguno se probó tampoco.
+
+- [ ] **8.1 · Varias conversaciones a la vez.** Hay un candado
+      (`_procesar_bajo_candado`) para que dos mensajes de la misma persona no se
+      pisen. **Nunca se probó bajo carga.** Si tiene un bug, dos personas pueden
+      mezclarse los turnos — **es el único fallo del que un negocio no te
+      perdona**, así que va primero de los tres.
+- [ ] **8.2 · Sobrevivir un reinicio.** Render reinicia en cada deploy. Alguien
+      a mitad de reservar, ¿pierde lo que eligió? El checkpointer dice que no.
+      Nadie lo verificó.
+- [ ] **8.3 · Que aturno no conteste.** Parcialmente cubierto. Falta el repaso
+      completo de qué ve la persona en cada caso.
+
 ---
 
 # Los riesgos, ordenados por lo que cuestan
@@ -211,15 +282,46 @@ modelo haga más: **el clasificador ya extrae todo eso y el flujo lo tira.**
 
 # El orden que propongo
 
-| # | Qué | Por qué ahí |
-|---|---|---|
-| **1** | Reindexar y medir (tarea 1) | Está a medias y desbloquea saber si el buscador anda |
-| **2** | Sacar el turno en un mensaje (tarea 6) | Lo que más cambia lo que vive la persona |
-| **3** | Varios negocios (tarea 3) | El techo del producto. Sin esto no hay segundo cliente |
-| **4** | Enchufar el canal (tarea 4) | Deja Meta a un cambio de bandera |
-| **5** | Meta (tarea 5) | Cuando haya cliente y monotributo |
+| # | Qué | Por qué ahí | Cuánto |
+|---|---|---|---|
+| **1** | 8.1 · Varias conversaciones a la vez | Si el candado tiene un bug, todo lo demás importa menos | horas |
+| **2** | 7.2 · Medir la extracción de datos | Es el número que decide si la tarea 6 es segura | horas |
+| **3** | 1 + 7.1 · Reindexar y medir el buscador | Está a medias y desbloquea saber si encuentra | horas |
+| **4** | 6 · Sacar el turno en un mensaje | Lo que más cambia lo que vive la persona | un día |
+| **5** | 7.3 · El simulador de clientes | El número que se le muestra a un negocio | un día |
+| **6** | 8.2 + 8.3 · Reinicio y aturno caído | Cerrar los huecos de confiabilidad | medio día |
+| **7** | 3 · Varios negocios | El techo del producto. Sin esto no hay segundo cliente | un día |
+| **8** | 4 · Enchufar el canal | Deja Meta a un cambio de bandera | un día |
+| **9** | 5 · Meta | Cuando haya cliente y monotributo | trámite |
+
+**Total hasta el punto 6: dos días y medio de trabajo.** Ahí el bot queda en
+9 / 8 / 9 / 3.
 
 La tarea 2 es tuya y no depende de mí.
+
+---
+
+# Cómo retomar esto
+
+Para arrancar una sesión nueva sin releer todo:
+
+1. **Leé este archivo** — es el mapa. Las casillas dicen qué falta.
+2. **Corré el tablero** para saber de dónde partís. Toma un minuto y es gratis:
+   ```bash
+   python test_flujo.py && python test_bordes.py && python test_canal.py \
+     && python test_demora.py && python test_metricas.py && python test_redaccion.py
+   python todos_los_caminos.py    # tiene que decir 49 caminos, 0 para mirar
+   python medir_costo.py          # tiene que dar ~0,00181 USD por turno
+   ```
+3. **[PLAN.md](PLAN.md)** tiene la bitácora: qué se planeó, qué salió distinto y
+   qué se encontró en el camino. Ahí está el «por qué» de cada decisión rara.
+4. **La forma de trabajar está en [CLAUDE.md](CLAUDE.md)**: el test primero, un
+   commit por tarea, y el tablero después de cada uno.
+
+**Lo que quedó corriendo el 21/8:** un reindexado de `demo-peluqueria` en
+segundo plano, esperando que volviera la cuota de Google. Verificar si entró
+—`Recuperador("demo-peluqueria").temas()` tiene que devolver más de 6
+fragmentos— antes de rehacerlo.
 
 ---
 
