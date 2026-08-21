@@ -397,7 +397,8 @@ Los pasos 1 y 2 se pueden hacer en cualquier orden. El 0 va primero y el 3 va
 | salida a un humano tras un fallo | **no → sí, desde el 2º** ✅ Paso 1 |
 | costo por conversación | **0,00176 USD** · 88% de mensajes no llegan al modelo |
 | caminos coherentes | 49 / 49, 0 para mirar |
-| containment | sin medir — Paso 2 |
+| containment | **medido** ✅ Paso 2 · `/metricas` |
+| listas vacías que piden un número | **3 → 0** ✅ |
 | acierto del clasificador | sin medir — Paso 3 |
 
 ---
@@ -449,8 +450,64 @@ Las entidades ya venían en la misma clasificación; no se agregó ni una llamad
 
 ---
 
-# Próximo: Paso 2 · Las métricas
+## Paso 2 · Las métricas — hecho
 
-Sin backfill. Tabla nueva, fila al cerrar, `/metricas`, y la tarea 2.4
-—calibrar el instrumento contra conversaciones de forma conocida— que es la que
-decide si el paso está terminado.
+`src/metricas.py` + `/metricas` + `test_metricas.py`. Tres decisiones salieron
+distinto de lo planeado:
+
+**El abandono no se escribe, se calcula al leer.** Nadie avisa que abandonó. Si
+se esperara a marcarlo haría falta un barrendero periódico, y una conversación
+que nunca vuelve no se marcaría jamás. Una conversación abierta y callada hace
+más de dos horas **es** un abandono, y eso se decide con un `where`.
+
+**El hilo se guarda hasheado.** Lleva el teléfono adentro, y para contar no hace
+falta saber de quién es la conversación. Guardarlo sería el pecado 7 cometido
+del lado nuestro. Hay un test que lo verifica.
+
+**Las ventanas se alinearon.** `gasto.py` lleva la cuenta del día; las métricas,
+de siempre. Dividir una por otra daba un número que parecía un costo y no lo
+era — y que encima bajaba solo, lo cual lo hacía peor: parecía una mejora. De
+ahí `resumen(solo_hoy=True)` y el bloque `hoy` aparte.
+
+### La calibración encontró dos cosas
+
+**1 · Un cast que faltaba.** El instrumento escribía bien y leía cero. La regla
+de "nunca levanta" se lo tragó y lo dejó en un `logger.warning`:
+`could not determine data type of parameter $1`. Sin `test_metricas.py`
+afirmando números exactos, `/metricas` habría devuelto ceros para siempre y
+nadie se habría enterado — que es justo lo que la tarea 2.4 existía para evitar.
+
+**2 · Un bug del bot, de los que ve un cliente.** Verificando de punta a punta
+apareció esto:
+
+```
+Elegí el servicio:
+
+Respondé con el número.
+```
+
+Un negocio sin servicios cargados —el estado normal de cualquiera recién dado
+de alta— recibía una lista vacía y un pedido de elegir un número que no existe.
+Y como ninguna respuesta podía ser válida, era además un bucle: el pecado 2.
+Pasaba en **dos de las tres listas** (servicios y horarios); la de días daba un
+no sin ninguna puerta.
+
+`apertura` ya se protegía de esto desde que pasó en producción. El resto, no.
+Arreglado en su propio commit, con `test_bordes.py [22]` cubriendo las tres.
+
+### Verificado contra el estado real
+
+Tres conversaciones por el webhook de verdad, con los números comprobables a
+mano:
+
+| | |
+|---|---|
+| 3 cerradas (1 reserva + 2 escaladas) | `containment: 0.3333` = 1/3 ✅ |
+| 7 mensajes hasta reservar | `turnos_hasta_reservar: 7` ✅ |
+| gasto del día ÷ 1 reserva | `usd_por_turno_resuelto: 0.00342` ✅ |
+
+Y el costo por turno sigue en **0,00176 USD**: las métricas no llaman al modelo.
+
+---
+
+# Próximo: Paso 3 · El conjunto dorado
