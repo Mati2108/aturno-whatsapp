@@ -24,6 +24,7 @@ python test_recuperacion.py   # relevancia del RAG, umbral 85%
 python test_ataques.py        # inyección, fuga, abuso de flujo, costo
 python test_demora.py         # aviso de demora y techo de tiempo
 python test_conocimiento.py   # lo que carga el panel sobrevive un reinicio (usa embeddings reales)
+python test_metricas.py       # el instrumento de /metricas, calibrado contra un patrón conocido
 python test_observabilidad.py # 5 escenarios trazados (necesita `phoenix serve` + PHOENIX_HABILITADO=true)
 python todos_los_caminos.py   # recorre las bifurcaciones e imprime lo que ve la persona
 ```
@@ -123,6 +124,29 @@ son semilla de desarrollo, no el estado real.
   `getStaffSpecificTimeRanges` de `aturno/src/components/BookingCalendar.jsx`.
   Si allá cambian las reglas de horarios, hay que tocar acá.
 
+## El clasificador tiene su propio test, y cuesta plata
+
+```bash
+python test_clasificador.py   # 56 casos contra `casos.jsonl`. NO es gratis (~0,08 USD)
+```
+
+Es el único que llama al modelo, así que **no va en el tablero de siempre**: se
+corre cuando se toca el prompt, el `ESQUEMA`, la tabla `ATAJOS` o el enum
+`Intencion`. Pregunta antes de gastar y respeta `TOPE_DIARIO_USD`.
+
+Dos reglas que lo mantienen útil:
+
+- **Cada bug del clasificador entra a `casos.jsonl` ANTES de arreglarse.** Es lo
+  que hace que el conjunto crezca solo y que un bug arreglado no vuelva.
+- **Lo que hay que leer es la matriz de confusión, no el porcentaje.** Dice con
+  qué se confunde cada intención, que es donde estuvieron los cuatro bugs de
+  agosto. Un 100% global no es una buena noticia: significa que los casos son
+  demasiado fáciles y el archivo sale con ≠ 0 avisándolo.
+
+`_sin_modelo()` en ese archivo **replica el orden de `entender`**. Si `entender`
+gana un escalón nuevo, hay que agregarlo allá también: la primera versión medía
+el clasificador suelto y marcó como fallas cuatro casos que el bot resuelve bien.
+
 ## Verificar contra el estado real, no contra lo que el bot dice
 
 Un bot que anuncia un turno sin reservarlo es peor que uno que falla. Las
@@ -139,6 +163,8 @@ del proyecto salía en pantalla en cada corrida de la primera y nadie lo vio.
 | [AUDITORIA_BOT.md](AUDITORIA_BOT.md) | Auditoría de comportamiento, caso por caso |
 | [SEGURIDAD.md](SEGURIDAD.md) | Credenciales a rotar antes de un cliente real |
 | [TODO-PANEL.md](TODO-PANEL.md) | Lo que falta del lado de aturno (otro repo) |
+| [INVESTIGACION.md](INVESTIGACION.md) | Qué dice la investigación sobre chatbots, y qué le falta a éste |
+| [PLAN.md](PLAN.md) | El plan de mejoras derivado de esa investigación, con bitácora de lo que se encontró |
 
 ## Commits
 

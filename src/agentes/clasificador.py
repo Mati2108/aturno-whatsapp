@@ -153,6 +153,8 @@ Reglas de extracción:
 - "cualquiera", "me da igual", "el que sea" -> profesional: "cualquiera".
 - Si pregunta precio, horario, dirección o formas de pago -> consultar_info.
 - "más", "otro horario", "más tarde", "no me sirve ninguno" -> ver_mas.
+  ver_mas es SIEMPRE sobre más horarios de la lista que se está mostrando.
+  "otro turno" o "un turno más" NO son ver_mas: son un pedido nuevo.
 - Pedir una persona, un humano, "quiero hablar con alguien", "pasame con
   alguien", "esto no me sirve", quejarse de hablar con un bot ->
   hablar_con_persona.

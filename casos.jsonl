@@ -1,0 +1,69 @@
+{"_": "═══ LOS BUGS QUE YA PASARON. Cada uno costó encontrarlo a mano, en producción. Ninguno puede volver."}
+{"mensaje": "no me llamo Milagros", "estado": "esperando_dia", "espera": "dar_nombre", "nota": "bug: caía en desconocido y derivaba al menú"}
+{"mensaje": "no soy Milagros", "estado": "esperando_dia", "espera": "dar_nombre", "nota": "bug: idem, otra forma de decirlo"}
+{"mensaje": "ese no es mi nombre", "estado": "esperando_dia", "espera": "dar_nombre"}
+{"mensaje": "no me llamo Milagros, me llamo Matías", "estado": "esperando_dia", "espera": "dar_nombre", "entidades": {"nombre": "Matías"}}
+{"mensaje": "me llamo Matías, no Milagros", "estado": "esperando_dia", "espera": "dar_nombre", "entidades": {"nombre": "Matías"}}
+{"mensaje": "quiero otro turno", "estado": "confirmado", "espera": "elegir_servicio", "nota": "bug: el modelo lo generalizaba a ver_mas y salía un error técnico"}
+{"mensaje": "quiero sacar otro turno más", "estado": "confirmado", "espera": "elegir_servicio"}
+{"mensaje": "hola", "estado": "confirmado", "espera": "saludo", "nota": "bug: el bucle de «De nada» — hola y gracias comparten intención"}
+{"mensaje": "ya pagué", "estado": "esperando_senia", "espera": "confirmar", "nota": "bug: contestaba con la lista de servicios"}
+
+{"_": "═══ LO QUE TIENE QUE SALIR SIEMPRE BIEN. Si esto falla, el bot no funciona."}
+{"mensaje": "quiero un turno", "estado": "apertura", "espera": "elegir_servicio"}
+{"mensaje": "hola, necesito cortarme el pelo", "estado": "apertura", "espera": "elegir_servicio", "entidades": {"servicio": "corte"}}
+{"mensaje": "buenas tardes", "estado": "apertura", "espera": "saludo"}
+{"mensaje": "el corte de pelo", "estado": "esperando_servicio", "espera": "elegir_servicio"}
+{"mensaje": "quiero teñirme", "estado": "esperando_servicio", "espera": "elegir_servicio"}
+{"mensaje": "con Nico", "estado": "esperando_staff", "espera": "elegir_staff"}
+{"mensaje": "me da igual quién sea", "estado": "esperando_staff", "espera": "elegir_staff"}
+{"mensaje": "el jueves", "estado": "esperando_dia", "espera": "elegir_dia"}
+{"mensaje": "mañana si se puede", "estado": "esperando_dia", "espera": "elegir_dia"}
+{"mensaje": "a las tres de la tarde", "estado": "esperando_horario", "espera": "elegir_horario"}
+{"mensaje": "las 15:30", "estado": "esperando_horario", "espera": "elegir_horario"}
+{"mensaje": "Matías Calo", "estado": "esperando_nombre", "espera": "dar_nombre", "entidades": {"nombre": "Matías Calo"}}
+{"mensaje": "me llamo Ana", "estado": "esperando_nombre", "espera": "dar_nombre", "entidades": {"nombre": "Ana"}}
+{"mensaje": "dale, confirmá", "estado": "esperando_confirmacion", "espera": "confirmar"}
+{"mensaje": "sí, está perfecto", "estado": "esperando_confirmacion", "espera": "confirmar"}
+
+{"_": "═══ EL «NO» EN CADA PASO. El peor bug del proyecto salió de acá: un «no» al resumen reservaba el turno igual."}
+{"mensaje": "no", "estado": "esperando_confirmacion", "espera": "rechazar"}
+{"mensaje": "no, está mal", "estado": "esperando_confirmacion", "espera": "rechazar"}
+{"mensaje": "así no", "estado": "esperando_confirmacion", "espera": "rechazar"}
+{"mensaje": "no", "estado": "esperando_dia", "espera": "desconocido", "nota": "un «no» suelto fuera del resumen no significa rechazar"}
+{"mensaje": "no", "estado": "esperando_horario", "espera": "desconocido"}
+{"mensaje": "no me gusta ninguno", "estado": "esperando_horario", "espera": "ver_mas", "duro": true}
+{"mensaje": "el jueves no puedo", "estado": "esperando_dia", "espera": "elegir_dia", "duro": true, "nota": "niega un día pero está eligiendo día"}
+
+{"_": "═══ CASOS DUROS A PROPÓSITO. Si el conjunto dorado da 100% en la primera corrida, está mal armado. Estos son los que tienen que costarle."}
+{"mensaje": "el martes que viene a la tarde", "estado": "esperando_dia", "espera": "elegir_dia", "duro": true, "nota": "dos entidades en un mensaje"}
+{"mensaje": "cuánto sale y cuándo tenés lugar", "estado": "apertura", "espera": "consultar_info", "duro": true, "nota": "dos intenciones a la vez"}
+{"mensaje": "dale", "estado": "esperando_servicio", "espera": "desconocido", "duro": true, "nota": "«dale» sólo confirma cuando la pregunta fue «¿confirmo?»"}
+{"mensaje": "mi vieja no puede el jueves, yo sí", "estado": "esperando_dia", "espera": "elegir_dia", "duro": true, "nota": "negación anidada"}
+{"mensaje": "el mismo que la vez pasada", "estado": "esperando_servicio", "espera": "desconocido", "duro": true, "nota": "referencia a algo que el bot no tiene"}
+{"mensaje": "y si voy sin turno?", "estado": "esperando_dia", "espera": "consultar_info", "duro": true}
+{"mensaje": "cualquiera menos el lunes", "estado": "esperando_dia", "espera": "elegir_dia", "duro": true}
+{"mensaje": "más temprano no tenés?", "estado": "esperando_horario", "espera": "ver_mas", "duro": true}
+{"mensaje": "1", "estado": "esperando_confirmacion", "espera": "desconocido", "duro": true, "nota": "el resumen NO es una lista para elegir por número"}
+{"mensaje": "ok", "estado": "esperando_nombre", "espera": "desconocido", "duro": true, "nota": "«ok» no es un nombre"}
+
+{"_": "═══ LA SALIDA A UN HUMANO. 87% de los clientes la considera esencial. Nunca puede fallar."}
+{"mensaje": "quiero hablar con alguien", "estado": "esperando_dia", "espera": "hablar_con_persona"}
+{"mensaje": "pasame con una persona", "estado": "esperando_servicio", "espera": "hablar_con_persona"}
+{"mensaje": "esto no me sirve, quiero un humano", "estado": "esperando_horario", "espera": "hablar_con_persona"}
+{"mensaje": "no me estás entendiendo, llamame vos", "estado": "esperando_dia", "espera": "hablar_con_persona", "duro": true}
+
+{"_": "═══ PREGUNTAS. Es lo que más se usa después de reservar y no tiene atajo posible."}
+{"mensaje": "cuánto sale el corte?", "estado": "apertura", "espera": "consultar_info"}
+{"mensaje": "dónde quedan?", "estado": "esperando_dia", "espera": "consultar_info"}
+{"mensaje": "aceptan tarjeta?", "estado": "esperando_horario", "espera": "consultar_info"}
+{"mensaje": "hasta qué hora abren los sábados?", "estado": "confirmado", "espera": "consultar_info"}
+{"mensaje": "tengo que llevar algo?", "estado": "esperando_confirmacion", "espera": "consultar_info", "duro": true}
+
+{"_": "═══ CANCELAR, VOLVER Y CAMBIAR. Tres cosas parecidas que significan distinto: confundirlas borra lo que la persona venía armando."}
+{"mensaje": "cancelá todo", "estado": "esperando_horario", "espera": "cancelar"}
+{"mensaje": "dejalo, no importa", "estado": "esperando_dia", "espera": "cancelar"}
+{"mensaje": "volvé para atrás", "estado": "esperando_horario", "espera": "volver"}
+{"mensaje": "quiero cambiar el día", "estado": "esperando_confirmacion", "espera": "elegir_dia"}
+{"mensaje": "mejor otro servicio", "estado": "esperando_confirmacion", "espera": "elegir_servicio"}
+{"mensaje": "prefiero sacarlo por la página", "estado": "esperando_servicio", "espera": "pedir_link"}

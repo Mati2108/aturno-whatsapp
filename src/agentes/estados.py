@@ -208,6 +208,20 @@ ATAJOS: dict[Estado | None, dict[frozenset[str], Intencion]] = {
         frozenset({"el servicio", "otro servicio", "cambiar el servicio"}):
             Intencion.ELEGIR_SERVICIO,
     },
+    # Ya tiene su turno y quiere otro. Va en tabla y no al modelo porque el
+    # modelo se equivocaba: la regla del prompt es sobre "otro HORARIO" y
+    # generalizaba a "otro TURNO", que es lo contrario —uno pide más de la lista
+    # que está viendo, el otro empieza de cero—. Lo mostró la matriz de
+    # confusión de `test_clasificador.py`: `elegir_servicio → ver_mas`.
+    #
+    # Sólo en CONFIRMADO: "otro" a mitad de un pedido significa otra cosa.
+    Estado.CONFIRMADO: {
+        frozenset({"otro turno", "quiero otro turno", "otro turno mas",
+                   "quiero otro turno mas", "quiero sacar otro turno",
+                   "sacar otro turno", "otro mas", "uno mas", "quiero otro",
+                   "necesito otro turno", "me saco otro", "quiero sacar otro"}):
+            Intencion.ELEGIR_SERVICIO,
+    },
     Estado.ESPERANDO_STAFF: {
         frozenset({"me da igual", "da igual", "cualquiera", "el que sea",
                    "la que sea", "cualquier", "no tengo preferencia", "indistinto",

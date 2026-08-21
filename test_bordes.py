@@ -998,6 +998,44 @@ async def t22_ninguna_lista_vacia_pide_un_numero(g):
                  "una persona" in texto or "local" in texto, repr(texto[:70]))
 
 
+async def t23_otro_turno_no_es_otro_horario(g):
+    """«Quiero otro turno» es un pedido nuevo, no «mostrame más horarios».
+
+    Lo encontró `test_clasificador.py` en su primera corrida, y con dato: la
+    matriz de confusión mostró `elegir_servicio → ver_mas ×2`. La regla del
+    prompt decía «"más", "otro horario", "más tarde" -> ver_mas» y el modelo
+    generalizaba de "otro horario" a "otro turno", que no tienen nada que ver.
+
+    Hoy la conversación TERMINA bien igual, pero por casualidad: el reinicio de
+    CONFIRMADO la lleva a la apertura antes de que la intención equivocada haga
+    daño. Andar de casualidad es exactamente lo que este repo resuelve con
+    tablas, así que va a la tabla — y gratis, sin llamar al modelo.
+    """
+    print(f"\n{NEGRITA}[23] «OTRO TURNO» NO ES «OTRO HORARIO»{FIN}")
+    print(f"{GRIS}  Lo encontró la matriz de confusión del conjunto dorado.{FIN}")
+
+    for frase in ("otro turno", "quiero otro turno", "quiero sacar otro turno",
+                  "otro turno mas", "uno mas", "quiero otro"):
+        fija = respuesta_fija(frase, Estado.CONFIRMADO)
+        chequear(f"«{frase}» es un pedido nuevo, sin modelo",
+                 fija is not None and fija[0] == Intencion.ELEGIR_SERVICIO,
+                 str(fija[0].value) if fija else "None")
+
+    # Y donde SÍ significa más horarios, sigue significando eso.
+    fija = respuesta_fija("mas horarios", Estado.ESPERANDO_HORARIO)
+    chequear("«más horarios» en el paso del horario sigue siendo ver_mas",
+             fija is not None and fija[0] == Intencion.VER_MAS,
+             str(fija[0].value) if fija else "None")
+
+    # De punta a punta: después de reservar, pedir otro arranca de cero.
+    await hasta_el_resumen(g, "t23")
+    await g.ainvoke({"mensaje": "sí"}, _cfg("t23", "Ana Pérez"))
+    s = await g.ainvoke({"mensaje": "quiero otro turno"}, _cfg("t23", "Ana Pérez"))
+    chequear("y la conversación arranca un pedido nuevo",
+             s["estado"] != Estado.CONFIRMADO.value, f"estado={s['estado']}")
+    chequear("sin mostrar un error", "complicó" not in s["respuesta"])
+
+
 async def main():
     doble = AturnoDoble()
     F.configurar(doble)
@@ -1023,6 +1061,7 @@ async def main():
     await t20_al_fallar_dice_que_si_entendio(g)
     await t21_la_metrica_no_puede_tumbar_el_turno(g)
     await t22_ninguna_lista_vacia_pide_un_numero(g)
+    await t23_otro_turno_no_es_otro_horario(g)
 
     print(f"\n{'─' * 58}")
     print(f"{VERDE}Todo en verde.{FIN}" if ok else f"{ROJO}Hay bordes rotos.{FIN}")
