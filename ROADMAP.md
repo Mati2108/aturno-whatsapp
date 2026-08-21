@@ -143,7 +143,7 @@ me equivoqué por cien.)*
 No las puedo hacer yo: una es una credencial, otra es el panel, la tercera
 necesita que pagues.
 
-### 🔴 2.1 · Rotar el secreto de Mercado Pago
+### 🟡 2.1 · Rotar el secreto de Mercado Pago
 
 `~/Aturno/aturno/backend/server.js:7246`
 
@@ -151,8 +151,18 @@ necesita que pagues.
 clientSecret: process.env.MERCADO_PAGO_CLIENT_SECRET || 'ygNk6O8ES9iKSRLWpagb2AeHvx3Go7bm',
 ```
 
-**El secreto de producción está escrito en el código, en un repo de GitHub.** Con
-eso alguien puede operar contra tu aplicación de Mercado Pago.
+**El secreto de producción está escrito en el código.** Es la llave que le
+permite a tu aplicación cobrar a través de Mercado Pago en nombre de los
+negocios.
+
+**Corrección de lo que dije antes:** yo lo marqué en rojo dando a entender que
+estaba expuesto públicamente. **El repo `Mati2108/Aturno` es privado**, así que
+sólo lo ve quien ya tiene acceso. Es mucho menos urgente de lo que planteé.
+
+Sigue valiendo la pena arreglarlo, por dos motivos concretos: queda en el
+historial de git para siempre —si el repo alguna vez se hace público, o entra un
+colaborador, el secreto viaja con él— y hoy no hay forma de rotarlo sin tocar
+código.
 
 El `||` con valor por defecto es lo que lo hace fácil de pasar por alto: parece
 que sale del entorno, y sólo sale si la variable está puesta.
@@ -171,18 +181,23 @@ Si alguien pregunta algo que caiga en esa sección, el bot se la contesta. **Se
 borra desde el panel de aturno**, no desde el repo — el archivo de acá es
 semilla de desarrollo, no el estado real.
 
-### 🟡 2.3 · Probar la seña de punta a punta
+### ✅ 2.3 · La seña — verificado en producción
 
 El bug que arrancó todo esto —pagaste una seña y el turno no se confirmó— está
-arreglado, pero **nunca se verificó en producción** porque falta poner
-`MERCADOPAGO_WEBHOOK_SECRET` en Render (el del *webhook*, no el de OAuth) y pagar
-una seña de prueba.
-
-Hasta que eso pase, está arreglado *en teoría*.
+arreglado **y probado de punta a punta**. Cerrado.
 
 ---
 
 ## Bloque 3 · Un negocio, un número
+
+> **Con Meta esto no desaparece: se vuelve más necesario.** Meta le da a cada
+> negocio su propio `phone_number_id`, pero **algo tiene que saber qué número es
+> de qué negocio**, y hoy eso es un diccionario escrito a mano en el código.
+>
+> Sin esto, cada negocio que conecte su número necesita que alguien edite
+> `config.py` y despliegue. Con esto, se da de alta en aturno, conecta su número
+> y el bot lo atiende sin que nadie toque nada — que es exactamente el producto
+> integral que querés vender.
 
 **Qué es.** Hoy `TENANTS` es un diccionario fijo, en el código, con **un solo
 número de WhatsApp** apuntando a **un solo negocio**.
@@ -257,10 +272,9 @@ producto entero.
 
 | Riesgo | Si pasa | Prob. | Mitigación | Estado |
 |---|---|---|---|---|
-| **El secreto de MP está en GitHub** | Alguien opera contra tu cuenta de Mercado Pago | Ya está expuesto | Rotarlo hoy · bloque 2.1 | 🔴 **abierto** |
+| **El secreto de MP está en el código** | Queda en el historial de git para siempre; no se puede rotar sin deploy | Baja — el repo es privado | Moverlo a variable de entorno · bloque 2.1 | 🟡 abierto |
 | **El bot inventa un dato del negocio** | Un cliente recibe información falsa. Lo peor que puede pasar | Alta si se hace sin baranda | Invariante verificable + vuelta al texto literal + tests adversarios · bloque 1 | 🟡 se ataca con el bloque 1 |
 | **Un solo negocio posible** | No podés tener un segundo cliente | 100% hoy | `TENANTS` dinámico · bloque 3 | 🟡 abierto |
-| **La seña cobra y no confirma** | El bug original, en producción | Media | Poner el secreto y probar · bloque 2.3 | 🟡 abierto, es tuyo |
 | **Cuota de Gemini: 1.000 preguntas por día en total** | El RAG deja de contestar preguntas | Alta con volumen | Medir primero. Hoy no se sabe cuántas se usan por día | 🟡 sin medir |
 | **Twilio trial: 50 mensajes por día** | La demo se corta a la mitad | 100% en una demo larga | `TWILIO_MODO=consola` para probar; cuenta paga para mostrar | 🟢 conocido |
 | **El sandbox obliga a un «join» que vence** | No le podés dar el número a un cliente real | 100% | Meta · bloque 5 | 🟢 conocido |
