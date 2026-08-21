@@ -1310,7 +1310,19 @@ async def responder(conv: Conversacion, config) -> dict:
         # pregunta como el problema.
         texto = datos.get("texto") or ""
         if not texto:
-            return {"respuesta": P.sin_dato()}
+            # Con el "no lo tengo" va de qué SÍ puede hablar este negocio.
+            #
+            # Sin eso la persona queda con un no y sin próximo paso, teniendo el
+            # bot cuatro o cinco secciones cargadas que nunca nombra. Y es la
+            # forma más barata posible de arreglarlo: `temas()` es un filtro por
+            # metadato sobre el índice —no calcula embeddings, no llama a ningún
+            # modelo— así que no cuesta nada y no puede inventar un tema.
+            try:
+                temas = _rag(negocio).temas()
+            except Exception:  # noqa: BLE001
+                logger.warning("sin temas para %s", negocio, exc_info=True)
+                temas = []
+            return {"respuesta": P.sin_dato(temas)}
 
         # Contestar y callarse deja a la persona sin saber cómo seguir.
         #

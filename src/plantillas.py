@@ -909,7 +909,7 @@ def fuera_de_alcance() -> str:
     )
 
 
-def sin_dato() -> str:
+def sin_dato(temas: list[str] | None = None) -> str:
     """La pregunta se entendió, pero el negocio no cargó esa respuesta.
 
     Es distinto de `fuera_de_alcance()`, que significa "no sé hacer eso". Acá
@@ -923,11 +923,23 @@ def sin_dato() -> str:
     algo verosímil manda a alguien hasta el local confiando en una invención.
     Un "no lo tengo" sale barato; un dato inventado no.
     """
-    return (
-        "Ese dato no lo tengo cargado y no quiero mandarte cualquier cosa. "
-        "Te lo confirman en el local.\n\n"
-        "¿Querés que te saque un turno?"
-    )
+    lineas = ["Ese dato no lo tengo cargado y no quiero mandarte cualquier "
+              "cosa. Te lo confirman en el local."]
+
+    # Y de qué SÍ puede hablar. Un "no lo tengo" a secas deja a la persona con
+    # un no y sin próximo paso, teniendo el bot cuatro o cinco secciones
+    # cargadas que nunca nombra.
+    #
+    # Los temas son los `##` del archivo que cargó el negocio, tal cual. No los
+    # elige ni los redacta un modelo: salen del índice con un filtro por
+    # metadato, así que ni cuestan una llamada ni pueden nombrar un tema que no
+    # exista.
+    if temas:
+        lineas += ["", "De lo que sí te puedo contar:"]
+        lineas += [f"· {t}" for t in temas]
+
+    lineas += ["", "¿Querés que te saque un turno?"]
+    return "\n".join(lineas)
 
 
 # Los campos de `Entidades` que se pueden REPETIRLE a la persona, y por qué

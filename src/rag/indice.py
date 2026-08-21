@@ -407,6 +407,41 @@ class Recuperador:
         )
         return resultados
 
+    def temas(self) -> list[str]:
+        """De qué puede hablar este negocio: los títulos de sus secciones.
+
+        Sirve para que un "ese dato no lo tengo" no termine en un callejón. La
+        persona queda con un no y sin saber por qué otra cosa preguntar,
+        teniendo el bot cuatro o cinco secciones cargadas que nunca nombra.
+
+        NO GASTA NADA. Es un filtro por metadato, no una búsqueda: no calcula
+        embeddings, así que no toca la cuota de 1.000 por día ni cuesta un
+        centavo. Por eso se puede llamar en cada "no lo tengo" sin pensarlo.
+
+        Y no puede inventar un tema: los títulos son los `##` que escribió el
+        negocio, guardados tal cual al indexar.
+
+        Ante cualquier problema devuelve la lista vacía, y la plantilla
+        simplemente no anuncia nada. Un tablero que tumba lo que mide es peor
+        que no tenerlo — la misma regla que ya siguen `gasto` y las trazas.
+        """
+        try:
+            crudo = self._indice.get(where={"business_id": self._business_id},
+                                     include=["metadatas"])
+        except Exception:  # noqa: BLE001
+            logger.warning("no pude listar los temas de %s", self._business_id,
+                           exc_info=True)
+            return []
+
+        vistos: list[str] = []
+        for meta in (crudo or {}).get("metadatas") or []:
+            seccion = (meta or {}).get("seccion")
+            # Se conserva el orden en que los escribió el negocio: es el orden
+            # en que los piensa, y ordenarlos alfabéticamente los desordena.
+            if seccion and seccion not in vistos:
+                vistos.append(seccion)
+        return vistos
+
     async def contexto(self, consulta: str) -> str:
         """Los fragmentos, listos para mandárselos a la persona.
 

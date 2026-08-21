@@ -52,6 +52,53 @@ def cargar() -> list[dict]:
     return casos
 
 
+def t3_sin_dato_dice_lo_que_si_sabe() -> list[str]:
+    """Cuando no hay respuesta cargada, decir qué SÍ se sabe.
+
+    Hoy el bot contesta "ese dato no lo tengo" y ahí se termina. La persona
+    queda con un no y sin saber por qué otra cosa preguntar — y encima el bot
+    tiene cargadas cuatro o cinco secciones que nunca nombra.
+
+    Nombrarlas no necesita modelo: los títulos son los `##` del archivo que
+    cargó el negocio, y salen del índice con un filtro por metadato. Gratis,
+    y sin que nada pueda inventarse un tema que no existe.
+    """
+    print(f"\n{NEGRITA}[3] SIN DATO, DICE DE QUÉ SÍ PUEDE HABLAR{FIN}")
+    print(f"{GRIS}  Un «no lo tengo» a secas deja a la persona sin próximo paso.{FIN}")
+
+    from src import plantillas as P
+
+    fallos = []
+    temas = ["Servicios y precios", "Horarios de atención", "Formas de pago",
+             "Dónde estamos y cómo llegar"]
+    texto = P.sin_dato(temas)
+
+    def chequear(nombre, cond, detalle=""):
+        marca = f"{VERDE}✓{FIN}" if cond else f"{ROJO}✗{FIN}"
+        print(f"  {marca} {nombre}" + (f"{GRIS}  ({detalle}){FIN}" if detalle else ""))
+        if not cond:
+            fallos.append(nombre)
+
+    chequear("sigue diciendo que no lo tiene", "no lo tengo" in texto.lower(),
+             texto[:50])
+    for t in temas:
+        chequear(f"nombra «{t}»", t.lower() in texto.lower())
+    chequear("los temas van en renglones, no en un párrafo",
+             texto.count("\n") >= len(temas))
+    chequear("no lleva markdown", "**" not in texto and "##" not in texto)
+
+    # Sin temas cargados no se anuncia una lista vacía. Es el mismo agujero de
+    # «Elegí el servicio:» sin servicios, y ya nos mordió una vez.
+    solo = P.sin_dato([])
+    chequear("sin temas, no anuncia una lista que no existe",
+             "\n·" not in solo and "puedo contarte" not in solo.lower(),
+             repr(solo[:60]))
+    chequear("y ofrece igual la salida a una persona",
+             "persona" in solo.lower() or "local" in solo.lower())
+
+    return fallos
+
+
 def main() -> int:
     casos = cargar()
     prohibidas = [c for c in casos if c["veredicto"] == "rechazar"]
@@ -111,6 +158,12 @@ def main() -> int:
               f"frenada(s). El guardián está demasiado apretado.{FIN}")
         for c, motivo in frenadas:
             print(f"{AMARILLO}    · {c['texto']}{FIN}\n{GRIS}      lo frenó: {motivo}{FIN}")
+        return 1
+
+    fallos_3 = t3_sin_dato_dice_lo_que_si_sabe()
+    if fallos_3:
+        print(f"\n{ROJO}{NEGRITA}  El «no lo tengo» no dice de qué sí puede "
+              f"hablar.{FIN}")
         return 1
 
     print(f"\n{VERDE}{NEGRITA}  El guardián atrapa todo lo prohibido y no frena "
