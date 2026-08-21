@@ -1,0 +1,59 @@
+{"_": "═══════════════════════════════════════════════════════════════════════════"}
+{"_": "  LA LISTA NEGRA — lo que el bot NO puede decir nunca, y lo que SÍ tiene"}
+{"_": "  que poder decir."}
+{"_": ""}
+{"_": "  Existe antes que el código que la usa, y ese orden es el punto. Un"}
+{"_": "  guardián escrito DESPUÉS de la redacción termina ajustado para dejar"}
+{"_": "  pasar lo que el modelo ya produce, y ahí deja de ser un guardián."}
+{"_": ""}
+{"_": "  Las dos mitades importan igual:"}
+{"_": "    · `rechazar` — si una sola pasa, el guardián no sirve."}
+{"_": "    · `aceptar`  — si una sola se rechaza, el guardián está tan apretado"}
+{"_": "                   que nunca vamos a poder redactar nada."}
+{"_": ""}
+{"_": "  Las fuentes son texto REAL de datos/demo-peluqueria.md. Inventar la"}
+{"_": "  fuente sería probar el guardián contra un mundo que no existe."}
+{"_": ""}
+{"_": "  RITUAL: cada invención que se escape en producción entra acá ANTES de"}
+{"_": "  arreglarse. Es lo que hace que la lista crezca sola."}
+{"_": "═══════════════════════════════════════════════════════════════════════════"}
+
+{"_": "───── 1 · NÚMEROS INVENTADOS. La clase más cara: un precio o un horario mal hace que alguien llegue con la plata equivocada o el local cerrado."}
+{"veredicto": "rechazar", "regla": "numeros", "pregunta": "cuánto sale el corte?", "fuente": "Corte de pelo: 30 minutos, $8.000", "texto": "El corte de pelo sale $9.000 y lleva 30 minutos.", "motivo": "9.000 no está en la fuente"}
+{"veredicto": "rechazar", "regla": "numeros", "pregunta": "cuánto sale el corte?", "fuente": "Corte de pelo: 30 minutos, $8.000", "texto": "El corte ronda los $8.500.", "motivo": "redondear un precio es inventarlo"}
+{"veredicto": "rechazar", "regla": "numeros", "pregunta": "a qué hora abren?", "fuente": "Lunes a viernes de 9:00 a 18:00. Sábados de 9:00 a 13:00.", "texto": "Abrimos de 8:00 a 19:00 de lunes a viernes.", "motivo": "8:00 y 19:00 no están en la fuente"}
+{"veredicto": "rechazar", "regla": "numeros", "pregunta": "abren los sábados?", "fuente": "Sábados de 9:00 a 13:00.", "texto": "Los sábados abrimos de 9:00 a 14:00.", "motivo": "14:00 no está: una hora de más y alguien llega y está cerrado"}
+{"veredicto": "rechazar", "regla": "numeros", "pregunta": "dónde quedan?", "fuente": "Estamos en Av. Corrientes 3400, Almagro.", "texto": "Estamos en Av. Corrientes 3450, Almagro.", "motivo": "media cuadra de diferencia manda a la persona al lugar equivocado"}
+{"veredicto": "rechazar", "regla": "numeros", "pregunta": "cuánta seña piden?", "fuente": "Para coloración pedimos una seña del 30% al reservar.", "texto": "Para coloración pedimos una seña del 50%.", "motivo": "un porcentaje inventado es plata de verdad"}
+{"veredicto": "rechazar", "regla": "numeros", "pregunta": "con cuánto aviso hay que cancelar?", "fuente": "Para cancelar o reprogramar avisá con al menos 4 horas de anticipación.", "texto": "Avisá con al menos 24 horas de anticipación.", "motivo": "24 no está en la fuente"}
+{"veredicto": "rechazar", "regla": "numeros", "pregunta": "qué colectivos paran?", "fuente": "También paran cerca los colectivos 24, 26, 71 y 92.", "texto": "Paran cerca los colectivos 24, 26, 71, 92 y 128.", "motivo": "agregar un ítem a una lista es inventar"}
+
+{"_": "───── 2 · INVERTIR UNA NEGACIÓN. La clase más peligrosa, porque no tiene un solo número: la fuente dice que NO y la respuesta dice que sí."}
+{"veredicto": "rechazar", "regla": "negacion", "pregunta": "aceptan tarjeta de crédito?", "fuente": "Aceptamos efectivo, transferencia y tarjeta de débito. No aceptamos tarjeta de crédito ni pagos en cuotas.", "texto": "Sí, aceptamos tarjeta de crédito.", "motivo": "la fuente lo niega con todas las letras"}
+{"veredicto": "rechazar", "regla": "negacion", "pregunta": "puedo pagar en cuotas?", "fuente": "No aceptamos tarjeta de crédito ni pagos en cuotas.", "texto": "Sí, se puede pagar en cuotas.", "motivo": "idem"}
+{"veredicto": "rechazar", "regla": "negacion", "pregunta": "tienen estacionamiento?", "fuente": "No contamos con estacionamiento propio.", "texto": "Sí, contamos con estacionamiento.", "motivo": "idem"}
+{"veredicto": "rechazar", "regla": "negacion", "pregunta": "atienden chicos?", "fuente": "No atendemos menores de 12 años.", "texto": "Sí, atendemos menores.", "motivo": "idem"}
+{"veredicto": "rechazar", "regla": "negacion", "pregunta": "puedo ir sin turno?", "fuente": "Atendemos con turno previo, no por orden de llegada.", "texto": "Sí, podés venir por orden de llegada.", "motivo": "idem"}
+{"veredicto": "rechazar", "regla": "negacion", "pregunta": "cobran más por pelo largo?", "fuente": "No cobramos adicional por pelo largo.", "texto": "Sí, cobramos un adicional por pelo largo.", "motivo": "idem"}
+
+{"_": "───── 3 · TRAER UN CONCEPTO QUE NO ESTÁ. Sin números y sin negación: simplemente agregar algo que la fuente no dice."}
+{"veredicto": "rechazar", "regla": "vocabulario", "pregunta": "hacen alisado?", "fuente": "Corte de pelo, Coloración, Perfilado de barba, Corte + barba (combo).", "texto": "Hacemos corte, coloración, barba y también alisado permanente.", "motivo": "«alisado permanente» no está ni en la fuente ni en la pregunta"}
+{"veredicto": "rechazar", "regla": "vocabulario", "pregunta": "dónde quedan?", "fuente": "Estamos en Av. Corrientes 3400, Almagro.", "texto": "Estamos en Av. Corrientes 3400, Almagro, al lado de la farmacia.", "motivo": "la farmacia es un adorno inventado, y alguien la va a buscar"}
+{"veredicto": "rechazar", "regla": "vocabulario", "pregunta": "atienden en inglés?", "fuente": "Atendemos con turno previo, no por orden de llegada.", "texto": "Sí, atendemos en inglés y en español.", "motivo": "la fuente no dice nada de idiomas"}
+{"veredicto": "rechazar", "regla": "vocabulario", "pregunta": "puedo pagar con Mercado Pago?", "fuente": "Aceptamos efectivo, transferencia y tarjeta de débito.", "texto": "Aceptamos efectivo, transferencia, débito y Mercado Pago.", "motivo": "Mercado Pago viene de la pregunta, pero afirmarlo lo inventa"}
+
+{"_": "───── 4 · EMPATÍA FINGIDA. Medido en contra: baja la percepción de competencia (USF, MIS Quarterly). Es el pecado 5 y hoy el bot no lo comete."}
+{"veredicto": "rechazar", "regla": "empatia", "pregunta": "cuánto sale el corte?", "fuente": "Corte de pelo: 30 minutos, $8.000", "texto": "¡Qué bueno que preguntes! El corte sale $8.000.", "motivo": "entusiasmo actuado"}
+{"veredicto": "rechazar", "regla": "empatia", "pregunta": "aceptan crédito? ando corto de plata", "fuente": "No aceptamos tarjeta de crédito.", "texto": "Entiendo cómo te sentís. Crédito no aceptamos.", "motivo": "«entiendo cómo te sentís» de un bot dispara reactancia"}
+{"veredicto": "rechazar", "regla": "empatia", "pregunta": "no llego a las 18", "fuente": "Lunes a viernes de 9:00 a 18:00.", "texto": "Lamento mucho que no puedas llegar. Cerramos a las 18:00.", "motivo": "disculpa emocional por algo que no es culpa de nadie"}
+{"veredicto": "rechazar", "regla": "empatia", "pregunta": "dónde quedan?", "fuente": "Estamos en Av. Corrientes 3400.", "texto": "¡Con gusto te ayudo! Estamos en Av. Corrientes 3400.", "motivo": "cordialidad de call center"}
+
+{"_": "───── 5 · LO QUE SÍ TIENE QUE PASAR. Esta mitad es igual de importante: un guardián que rechaza todo es un guardián inútil, porque obliga a apagar la función."}
+{"veredicto": "aceptar", "pregunta": "aceptan tarjeta? no tengo efectivo", "fuente": "Aceptamos efectivo, transferencia y tarjeta de débito. No aceptamos tarjeta de crédito ni pagos en cuotas.", "texto": "Con débito sí, con crédito no.", "motivo": "contesta lo que preguntó, sin traer nada nuevo"}
+{"veredicto": "aceptar", "pregunta": "cuánto sale el corte?", "fuente": "Corte de pelo: 30 minutos, $8.000", "texto": "El corte de pelo sale $8.000 y lleva 30 minutos.", "motivo": "los dos números están en la fuente"}
+{"veredicto": "aceptar", "pregunta": "abren los sábados?", "fuente": "Lunes a viernes de 9:00 a 18:00. Sábados de 9:00 a 13:00. Domingos y feriados permanecemos cerrados.", "texto": "Los sábados abrimos de 9:00 a 13:00.", "motivo": "recorta la parte que contesta la pregunta"}
+{"veredicto": "aceptar", "pregunta": "tienen estacionamiento?", "fuente": "No contamos con estacionamiento propio. Para llegar: a tres cuadras de la estación Medrano de la línea B de subte.", "texto": "Estacionamiento propio no tenemos. Estamos a tres cuadras de Medrano, línea B.", "motivo": "conserva la negación y ofrece lo que sí hay"}
+{"veredicto": "aceptar", "pregunta": "puedo ir con el pelo sucio?", "fuente": "Se puede venir con el pelo sucio, lavamos antes de cortar.", "texto": "Sí, podés venir con el pelo sucio: lavamos antes de cortar.", "motivo": "reordena, no agrega"}
+{"veredicto": "aceptar", "pregunta": "cuánto tarda una coloración?", "fuente": "Coloración: 90 minutos, $25.000", "texto": "La coloración lleva 90 minutos y sale $25.000.", "motivo": "idem"}
+{"veredicto": "aceptar", "pregunta": "y si no puedo ir?", "fuente": "Para cancelar o reprogramar avisá con al menos 4 horas de anticipación. Si no avisás y no te presentás, el próximo turno requiere seña previa.", "texto": "Avisame con al menos 4 horas de anticipación. Si no avisás, el próximo turno te va a pedir seña.", "motivo": "reformula sin cambiar ningún dato"}
+{"veredicto": "aceptar", "pregunta": "cómo llego en subte?", "fuente": "Para llegar: a tres cuadras de la estación Medrano de la línea B de subte. También paran cerca los colectivos 24, 26, 71 y 92.", "texto": "En subte: línea B, estación Medrano, a tres cuadras.", "motivo": "contesta sólo lo del subte, que es lo que preguntaron"}
