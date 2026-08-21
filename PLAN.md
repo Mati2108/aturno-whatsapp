@@ -389,13 +389,68 @@ Los pasos 1 y 2 se pueden hacer en cualquier orden. El 0 va primero y el 3 va
 
 # Línea de base
 
-*(Se completa al terminar el Paso 0. Sin fechar y sin números, este bloque no
-sirve.)*
+**20 de agosto de 2026.**
 
-| Fecha | Métrica | Valor |
-|---|---|---|
-| | pasos que reconocen al fallar | — / 6 |
-| | containment | sin medir |
-| | acierto del clasificador | sin medir |
-| | costo por conversación | ver `medir_costo.py` |
-| | caminos coherentes | 49 / 49 |
+| Métrica | Valor |
+|---|---|
+| pasos que reconocen al fallar | **0 / 6 → 6 / 6** ✅ Paso 1 |
+| salida a un humano tras un fallo | **no → sí, desde el 2º** ✅ Paso 1 |
+| costo por conversación | **0,00176 USD** · 88% de mensajes no llegan al modelo |
+| caminos coherentes | 49 / 49, 0 para mirar |
+| containment | sin medir — Paso 2 |
+| acierto del clasificador | sin medir — Paso 3 |
+
+---
+
+# Bitácora
+
+## Paso 0 · El termómetro — hecho
+
+**0.1 se disolvió.** Iba a ser un script que imprimiera "0 de 6". El propio repo
+tiene la doctrina en contra: *"un guion que no afirma nada no protege nada"*.
+Fue como afirmaciones en `test_bordes.py [20]`, que se ponen en rojo solas.
+
+**0.2 corrió, y encontró lo que tenía que encontrar.**
+
+Pregunta: ¿se puede leer el estado final de las conversaciones desde afuera del
+checkpointer? De eso dependía todo el diseño del Paso 2.
+
+| | |
+|---|---|
+| **Se puede leer** | ✅ `checkpoint->'channel_values'->>'estado'` en el jsonb. SQL crudo y la API de LangGraph dan **el mismo resultado**, así que el dato es confiable |
+| **Pero no sirve de historia** | ⚠️ De 45 conversaciones en la base, **38 no tienen `estado`** — son de versiones viejas del grafo, con otro esquema. Y **ninguna** está en `confirmado` |
+
+**Consecuencia para el Paso 2: no hay backfill.** Los números arrancan de cero
+el día que se escriba la tabla. Eso no cambia el diseño —la tarea 2.2 ya era
+escribir una fila propia al cerrar— pero mata la idea de recuperar historia.
+
+Barato de descubrir ahora, caro de descubrir después de escribir la tabla, el
+endpoint y sus tests.
+
+## Paso 1 · La reparación — hecho
+
+Las cuatro tareas, en un commit. Verde en el tablero completo.
+
+**El riesgo apareció, y era el que el plan anticipaba.** Escribiendo la tarea
+1.2 salió el caso que convertía el arreglo en algo peor que el bug:
+
+> `"no quiero el jueves"` trae `fecha=jueves` **exactamente igual** que
+> `"quiero el jueves"`. El clasificador extrae la entidad, no el signo.
+
+Sin baranda, el bot le contestaba *"entendí que querés algo para el jueves"* a
+alguien que acababa de decir lo contrario — y con cara de haberlo entendido,
+que es el pecado 6 y es peor que el pecado 4 que estábamos arreglando.
+
+Se resolvió con `hay_negacion()` en `estados.py`, y **los seis casos quedaron
+en el test**. Es la baranda que el plan pedía: *sólo se refleja lo renderizable*.
+
+**El control de tokens pasó:** `medir_costo.py` da idéntico antes y después.
+Las entidades ya venían en la misma clasificación; no se agregó ni una llamada.
+
+---
+
+# Próximo: Paso 2 · Las métricas
+
+Sin backfill. Tabla nueva, fila al cerrar, `/metricas`, y la tarea 2.4
+—calibrar el instrumento contra conversaciones de forma conocida— que es la que
+decide si el paso está terminado.
