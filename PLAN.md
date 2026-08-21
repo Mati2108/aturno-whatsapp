@@ -399,7 +399,7 @@ Los pasos 1 y 2 se pueden hacer en cualquier orden. El 0 va primero y el 3 va
 | caminos coherentes | 49 / 49, 0 para mirar |
 | containment | **medido** ✅ Paso 2 · `/metricas` |
 | listas vacías que piden un número | **3 → 0** ✅ |
-| acierto del clasificador | sin medir — Paso 3 |
+| acierto del clasificador | **92,9%** ✅ Paso 3 · 56 casos |
 
 ---
 
@@ -510,4 +510,76 @@ Y el costo por turno sigue en **0,00176 USD**: las métricas no llaman al modelo
 
 ---
 
-# Próximo: Paso 3 · El conjunto dorado
+## Paso 3 · El conjunto dorado — hecho
+
+`casos.jsonl` (56 casos) + `test_clasificador.py`. **89,3% → 92,9%** en la
+misma sesión, porque el conjunto encontró un bug y el bug se arregló.
+
+### El costo estaba mal en el plan, por cien
+
+El plan decía *"~100 casos ≈ US$ 0,002"*. Ese es el costo de **una** llamada, no
+de cien. Cien casos cuestan ~US$ 0,18; los 56 de hoy, **US$ 0,079**. Corregido
+en el archivo, que además imprime el número antes de gastar y pide confirmación.
+
+### Lo que encontró, en orden
+
+**1 · Mi propio evaluador estaba mal.** La primera corrida dio 83,9% y marcó
+como fallas cuatro casos que el bot **resuelve bien**: «no soy Milagros», «ese
+no es mi nombre», «mejor otro servicio». Los resuelven las tablas de código
+—`correccion_de_nombre`, `pedido_de_cambio`— antes de que el modelo vea nada, y
+el evaluador llamaba al clasificador derecho.
+
+Un evaluador que mide una pieza suelta en vez del camino real **inventa bugs
+que no existen y esconde los que sí**. Corregido: `_sin_modelo()` replica el
+orden de `entender`, y hay una nota en `CLAUDE.md` para que se mantengan
+sincronizados. Con eso, 89,3% — y `dar_nombre` al 100%, o sea que los arreglos
+de esta semana funcionan.
+
+**2 · Un bug real, y con dato.** La matriz de confusión mostró
+`elegir_servicio → ver_mas ×2`:
+
+```
+quiero otro turno          →  ver_mas   (esperaba elegir_servicio)
+quiero sacar otro turno más →  ver_mas
+```
+
+La regla del prompt era *«"más", "otro horario", "más tarde" -> ver_mas»* y el
+modelo generalizaba de **otro horario** a **otro turno**, que son lo contrario:
+uno pide más de la lista que está viendo, el otro empieza de cero.
+
+La conversación terminaba bien igual, pero **por casualidad** —el reinicio de
+CONFIRMADO la lleva a la apertura antes de que la intención equivocada haga
+daño—. Andar de casualidad es lo que este repo resuelve con tablas.
+
+Arreglado en los dos lados: una entrada nueva en `ATAJOS` para `CONFIRMADO` (que
+además lo hace gratis) y la regla del prompt angostada. `elegir_servicio` pasó
+de 71% a **100%** y el global a **92,9%**.
+
+### La deuda que queda, a la vista
+
+Los cuatro errores restantes son todos frases con "no" que el modelo lee como
+`rechazar`: «no» suelto en el paso del día y del horario, «el jueves no puedo»,
+«mi vieja no puede el jueves, yo sí».
+
+**No se ve en pantalla**: el flujo sólo honra `RECHAZAR` en el resumen, y fuera
+de ahí cae en el pedido del paso — lo mismo que haría con `desconocido`. Pero
+está, y ahora se mide. Queda como piso explícito en `PISO`, no bajado para que
+pase: dejado como está para que se note el día que empeore.
+
+### El piso ya juzga
+
+Fijado después de la primera corrida, con tres niveles y un motivo cada uno:
+**1.00** donde fallar es inaceptable (`hablar_con_persona`, `rechazar`,
+`confirmar`), **0.85** donde hoy da 100% pero depende del modelo, y el número
+actual redondeado para abajo en las dos que arrastran deuda.
+
+---
+
+# Lo que queda
+
+Los cuatro pasos del plan están hechos. Lo que sigue no es de este plan:
+
+- **Vía B** — enchufar `src/canal/` en el webhook, `TENANTS` dinámico, la
+  ventana de 24 h. Se puede hacer y probar con Twilio, sin cuenta de Meta.
+- **La deuda del clasificador** — las frases con "no" que caen en `rechazar`.
+- **Esperando a Meta** — Embedded Signup, plantillas, envío real.
