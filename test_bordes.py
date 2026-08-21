@@ -963,6 +963,41 @@ async def t21_la_metrica_no_puede_tumbar_el_turno(g):
         M.olvidar_pool()
 
 
+async def t22_ninguna_lista_vacia_pide_un_numero(g):
+    """Anunciar una lista y no mostrarla es peor que no anunciarla.
+
+    Apareció verificando las métricas: un negocio sin servicios cargados —el
+    estado normal de cualquiera que recién se da de alta— recibía
+
+        Elegí el servicio:
+
+        Respondé con el número.
+
+    o sea que se le pide a la persona que conteste con un número que no existe.
+    Y encima el bot no puede aceptar ninguna respuesta, así que la conversación
+    entra en el bucle del pecado 2: el callejón donde todo lo que escribís
+    devuelve lo mismo.
+
+    `apertura` ya se protege de esto desde que pasó en producción; el resto de
+    los listados no. Este caso los cubre a todos, para que un listado nuevo no
+    reestrene el mismo agujero.
+    """
+    print(f"\n{NEGRITA}[22] NINGUNA LISTA VACÍA PIDE UN NÚMERO{FIN}")
+    print(f"{GRIS}  Un negocio recién dado de alta no tiene nada cargado.{FIN}")
+
+    vacias = {
+        "servicios": P.lista_servicios([]),
+        "días": P.selector_dias([]),
+        "horarios": P.lista_horarios(dt.date.today(), []),
+    }
+    for que, texto in vacias.items():
+        chequear(f"sin {que}, no pide un número",
+                 "con el número" not in texto and "un número" not in texto,
+                 repr(texto[:70]))
+        chequear(f"sin {que}, dice qué pasa y ofrece una salida",
+                 "una persona" in texto or "local" in texto, repr(texto[:70]))
+
+
 async def main():
     doble = AturnoDoble()
     F.configurar(doble)
@@ -987,6 +1022,7 @@ async def main():
     await t19_todas_las_formas_de_negar_el_nombre()
     await t20_al_fallar_dice_que_si_entendio(g)
     await t21_la_metrica_no_puede_tumbar_el_turno(g)
+    await t22_ninguna_lista_vacia_pide_un_numero(g)
 
     print(f"\n{'─' * 58}")
     print(f"{VERDE}Todo en verde.{FIN}" if ok else f"{ROJO}Hay bordes rotos.{FIN}")

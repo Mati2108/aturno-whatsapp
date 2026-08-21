@@ -143,6 +143,15 @@ def lista_servicios(servicios: list[Servicio], preseleccion: str | None = None) 
     es el mismo que en la web, y ver el match marcado le confirma que la
     entendimos bien antes de avanzar.
     """
+    # Sin servicios NO se anuncia una lista. `apertura` ya se protege de esto
+    # desde que pasó en producción; acá no, y el agujero volvió a aparecer solo
+    # —un negocio recién dado de alta no tiene nada cargado—. Pedirle a alguien
+    # que "responda con el número" cuando no hay ningún número no es sólo raro:
+    # es un callejón, porque después ninguna respuesta puede ser válida.
+    if not servicios:
+        return ("Todavía no tengo cargados los servicios de este negocio.\n\n"
+                "Escribime «una persona» y te contesta alguien del local.")
+
     lineas = ["Elegí el servicio:", ""]
     for i, s in enumerate(servicios, 1):
         marca = " ✓" if preseleccion and s.id == preseleccion else ""
@@ -256,7 +265,12 @@ def selector_dias(dias: list[DiaConCupo], hoy: date | None = None) -> str:
                           f"{_dia_corto(d.fecha)} — {d.libres} {plural}")
 
     if numero == 0:
-        return "No me queda ningún día con lugar en las próximas semanas."
+        # Decía sólo la primera línea, y ahí se terminaba la conversación: la
+        # persona quedaba con un no y sin ninguna puerta. Poder llegar a un
+        # humano es lo que el 87% de los clientes considera esencial, y el
+        # momento en que más se busca es justo después de un no.
+        return ("No me queda ningún día con lugar en las próximas semanas.\n\n"
+                "Escribime «una persona» y te contesta alguien del local.")
 
     # Los días sin lugar no llevan número, así que la numeración salta. Decir
     # solo "respondé con el número" delante de una lista con huecos parece un
@@ -290,6 +304,14 @@ def lista_horarios(dia: date, horarios: list, maximo: int = 8) -> str:
     Se cortan en `maximo` porque una lista de veinte horarios no se lee en un
     celular; el resto se pide explícitamente.
     """
+    # Mismo caso que en los servicios: un día sin horarios libres anunciaba
+    # "Horarios para el Jueves 20:" y abajo nada. Acá además hay una salida
+    # mejor que llamar a una persona —probar otro día— así que va primero.
+    if not horarios:
+        return (f"No me quedan horarios libres el {_dia_corto(dia)}.\n\n"
+                "Escribime «otro día» y te muestro los que sí tienen lugar, "
+                "o «una persona» y te contesta alguien del local.")
+
     mostrados = horarios[:maximo]
     lineas = [f"Horarios para el {_dia_corto(dia)}:", ""]
     for i, h in enumerate(mostrados, 1):
