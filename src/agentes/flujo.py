@@ -584,21 +584,34 @@ async def avanzar(conv: Conversacion, config) -> dict:
         # CUALQUIER pregunta contestaba "se me complicó procesar eso". El
         # proveedor de embeddings caído no es algo que la persona pueda
         # arreglar ni entender; que el bot no sepa un dato, sí.
+        # NO ENCONTRÉ y NO PUDE BUSCAR son dos cosas distintas, y confundirlas
+        # hace un daño que no se ve.
+        #
+        # Con la cuota diaria de embeddings agotada —1.000 por día en el plan
+        # gratuito de Google, y se agota— el bot le contestaba a cada persona
+        # "ese dato no lo tengo cargado". Es falso: el negocio SÍ lo tiene.
+        #
+        # Y peor: cada una de esas preguntas se le manda al panel como "alguien
+        # preguntó algo que no tenés contestado", así que el dueño abre el panel
+        # y encuentra una lista de preguntas que ya respondió. Después de dos o
+        # tres veces deja de mirarlo, y ahí las que sí faltaban tampoco las ve.
+        caido = False
         try:
             texto, fragmentos = await _rag(negocio).contexto_y_cuantos(consulta)
         except Exception:  # noqa: BLE001
             logger.warning("la búsqueda falló para %s", negocio, exc_info=True)
-            texto, fragmentos = "", 0
+            texto, fragmentos, caido = "", 0, True
+
+        if caido:
+            return {"_plantilla": "buscador_caido", "_datos": {}}
 
         # Sin texto, el negocio no tiene cargada esa respuesta. La pregunta va
         # al panel en vez de perderse: hasta ahora el bot decía "no lo tengo
         # cargado" y ahí terminaba, así que el negocio nunca se enteraba de qué
         # le preguntaban y nunca podía cargarlo.
         #
-        # En segundo plano y sin esperar: la persona no puede quedarse
-        # esperando a que el panel conteste. Y sólo cuando la búsqueda no
-        # encontró nada, no cuando el buscador está caído — una cuota agotada
-        # llenaría la lista de preguntas que el negocio SÍ tiene contestadas.
+        # En segundo plano y sin esperar: la persona no puede quedarse esperando
+        # a que el panel conteste.
         if not texto:
             asyncio.create_task(avisar_sin_respuesta(negocio, consulta))
 
@@ -1310,6 +1323,13 @@ async def responder(conv: Conversacion, config) -> dict:
         paso = await _pedir_paso(conv, cfg, negocio, nombre_negocio, servicios)
         return {"respuesta": f"{cabecera}\n\n{paso['respuesta']}",
                 "opciones": paso.get("opciones", [])}
+
+    if especial == "buscador_caido":
+        # No se pudo buscar. No se dice "no lo tengo cargado" —sería mentira— y
+        # no se agrega el pedido del paso: el mensaje ya nombra las dos salidas
+        # que la persona tiene ahora, y sumarle una lista lo convierte en una
+        # pared justo cuando algo no anduvo.
+        return {"respuesta": P.buscador_caido(), "opciones": []}
 
     if especial == "info":
         # Sin texto, el negocio no cargó esa respuesta. Se dice eso y no

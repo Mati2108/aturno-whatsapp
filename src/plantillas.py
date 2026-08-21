@@ -909,6 +909,29 @@ def fuera_de_alcance() -> str:
     )
 
 
+def buscador_caido() -> str:
+    """No se pudo BUSCAR. Es distinto de que el dato no esté cargado.
+
+    Los dos terminaban en el mismo mensaje —"ese dato no lo tengo cargado"— y
+    eso es mentirle a la persona: el negocio sí lo tiene, lo que no anda es la
+    búsqueda. Pasó en serio, con la cuota diaria de embeddings agotada.
+
+    Decirlo como es tiene dos ventajas sobre la mentira piadosa: la persona
+    entiende que puede volver a intentar en un rato —cosa que con "no lo tengo
+    cargado" no haría nunca— y el negocio no queda como si no hubiera cargado
+    algo que sí cargó.
+
+    Y se aclara que el turno sí se puede sacar, porque es verdad: lo único que
+    depende de la búsqueda son las preguntas.
+    """
+    return "\n".join([
+        "Ahora mismo no puedo consultar esa información. Probá de nuevo en un "
+        "rato, o escribime «una persona» y te contesta alguien del local.",
+        "",
+        "El turno sí te lo puedo sacar igual.",
+    ])
+
+
 def sin_dato(temas: list[str] | None = None) -> str:
     """La pregunta se entendió, pero el negocio no cargó esa respuesta.
 

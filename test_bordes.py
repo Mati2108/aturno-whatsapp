@@ -1036,6 +1036,84 @@ async def t23_otro_turno_no_es_otro_horario(g):
     chequear("sin mostrar un error", "complicó" not in s["respuesta"])
 
 
+async def t24_buscador_caido_no_es_dato_faltante(g):
+    """El buscador caído y el dato no cargado NO son lo mismo.
+
+    Apareció de verdad: se agotó la cuota diaria de embeddings de Google —1.000
+    por día en el plan gratuito— y a partir de ahí el bot le contestaba a cada
+    persona «ese dato no lo tengo cargado». Es mentira: el negocio SÍ lo tiene
+    cargado, lo que no funciona es la búsqueda.
+
+    Y hace un daño que nadie ve: cada una de esas preguntas se le manda al panel
+    como «alguien preguntó algo que no tenés contestado», así que el negocio
+    abre su panel y encuentra una lista de preguntas que YA respondió. Después
+    de dos o tres veces, deja de mirar el panel — y ahí las preguntas que sí
+    faltaban tampoco las ve.
+
+    El comentario del código ya decía que había que distinguirlos. El código no
+    lo hacía.
+    """
+    print(f"\n{NEGRITA}[24] EL BUSCADOR CAÍDO NO ES UN DATO QUE FALTA{FIN}")
+    print(f"{GRIS}  Pasó de verdad: se agotó la cuota de embeddings.{FIN}")
+
+    from src.api import conversaciones as C
+
+    avisos = []
+
+    async def espiar(negocio, consulta):
+        avisos.append((negocio, consulta))
+
+    class Caido:
+        async def contexto_y_cuantos(self, consulta):
+            raise RuntimeError("429 RESOURCE_EXHAUSTED")
+
+        def temas(self):
+            raise RuntimeError("429 RESOURCE_EXHAUSTED")
+
+    class SinDato:
+        async def contexto_y_cuantos(self, consulta):
+            return "", 0
+
+        def temas(self):
+            return ["Servicios y precios", "Horarios de atención"]
+
+    orig_rag, orig_avisar = F._rag, F.avisar_sin_respuesta
+    F.avisar_sin_respuesta = espiar
+
+    async def preguntar(hilo):
+        conv = {"mensaje": "aceptan tarjeta?", "estado": Estado.ESPERANDO_SERVICIO.value,
+                "intent": Intencion.CONSULTAR_INFO.value, "entidades": {},
+                "opciones": [], "sin_entender": 0}
+        cambios = await F.avanzar(conv, _cfg(hilo))
+        salida = await F.responder({**conv, **cambios}, _cfg(hilo))
+        await asyncio.sleep(0)   # que corra el aviso en segundo plano, si sale
+        return salida["respuesta"]
+
+    try:
+        # ---- El buscador caído ----
+        F._rag = lambda n: Caido()
+        avisos.clear()
+        texto = await preguntar("t24a")
+        chequear("NO le dice que el dato no está cargado",
+                 "no lo tengo cargado" not in texto.lower(), texto[:60])
+        chequear("dice que ahora no puede consultarlo",
+                 "ahora" in texto.lower() or "en un rato" in texto.lower(), texto[:60])
+        chequear("y ofrece una persona", "persona" in texto.lower())
+        chequear("NO le llena el panel al negocio con algo que sí tiene",
+                 not avisos, str(avisos))
+
+        # ---- El dato que de verdad no está ----
+        F._rag = lambda n: SinDato()
+        avisos.clear()
+        texto = await preguntar("t24b")
+        chequear("acá SÍ dice que no lo tiene cargado",
+                 "no lo tengo cargado" in texto.lower(), texto[:60])
+        chequear("y nombra de qué sí puede hablar", "Servicios y precios" in texto)
+        chequear("y SÍ le avisa al panel", len(avisos) == 1, str(avisos))
+    finally:
+        F._rag, F.avisar_sin_respuesta = orig_rag, orig_avisar
+
+
 async def main():
     doble = AturnoDoble()
     F.configurar(doble)
@@ -1062,6 +1140,7 @@ async def main():
     await t21_la_metrica_no_puede_tumbar_el_turno(g)
     await t22_ninguna_lista_vacia_pide_un_numero(g)
     await t23_otro_turno_no_es_otro_horario(g)
+    await t24_buscador_caido_no_es_dato_faltante(g)
 
     print(f"\n{'─' * 58}")
     print(f"{VERDE}Todo en verde.{FIN}" if ok else f"{ROJO}Hay bordes rotos.{FIN}")
