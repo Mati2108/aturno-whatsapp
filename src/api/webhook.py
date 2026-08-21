@@ -55,6 +55,7 @@ from src.fechas import ahora, calendario
 from src import plantillas as P
 from src.observabilidad import configurar_trazas, trazado_activo
 from src.gasto import GASTO
+from src import metricas
 from src.modelo import construir_modelo, hay_credencial
 from src.rag.indice import CARPETA_DATOS, modelo_en_uso, reindexar_negocio
 from src.schemas import MensajeEntrante, Tenant
@@ -137,6 +138,13 @@ async def _al_arrancar() -> None:
     saver = await _saver_ctx.__aenter__()
     await saver.setup()  # crea las tablas del checkpointer si faltan
     _grafo = construir_flujo(saver)
+
+    # La tabla de métricas, en la misma base. Si falla, se avisa y se sigue: un
+    # bot que no cuenta sus conversaciones sirve; uno que no arranca, no.
+    try:
+        await metricas.preparar()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("sin tabla de métricas (%s): %s", type(e).__name__, e)
 
     await _traer_el_conocimiento()
 
@@ -785,6 +793,49 @@ async def gasto() -> dict:
     return GASTO.resumen()
 
 
+@app.get("/metricas")
+async def metricas_() -> dict:
+    """Cuántas conversaciones resuelve el bot solo, y dónde se cae la gente.
+
+    La otra mitad de `/gasto`: ahí está lo que sale, acá lo que rinde. Juntos
+    dan el número que va en un presupuesto —costo por turno RESUELTO— que es
+    distinto del costo por conversación y siempre más alto.
+
+    `containment` es el número que mira un negocio antes de pagar. Para un bot
+    angosto y transaccional como éste, la referencia de industria es 65–85%.
+    `abandono_por_paso` es el que dice QUÉ arreglar: no que algo anda mal, sino
+    dónde.
+
+    Público como `/gasto` y por lo mismo: acá no hay ningún teléfono ni ningún
+    dato de ninguna persona —el hilo se guarda hasheado— y pedir credenciales
+    para ver si el bot funciona es la fricción que hace que nadie mire.
+    """
+    siempre = await metricas.resumen()
+
+    # El costo por turno resuelto se calcula SÓLO con la ventana de hoy, porque
+    # es la única que lleva `gasto.py`. Dividir el gasto del día por las
+    # conversaciones de siempre da un número que parece un costo y no lo es —y
+    # que además va bajando solo, lo cual lo hace peor: parece una mejora.
+    hoy = await metricas.resumen(solo_hoy=True)
+    usd_hoy = GASTO.resumen().get("usd") or 0.0
+    reservadas_hoy = hoy["reservadas"]
+
+    return {
+        **siempre,
+        "referencia_containment": "0.65 a 0.85 para un bot transaccional",
+        "hoy": {
+            "conversaciones": hoy["cerradas"] + hoy["en_curso"],
+            "reservadas": reservadas_hoy,
+            "usd": round(usd_hoy, 5),
+            # Sin turnos reservados no se inventa una división. Un costo por
+            # turno calculado sobre cero turnos no es un número grande: no es
+            # un número.
+            "usd_por_turno_resuelto": (round(usd_hoy / reservadas_hoy, 5)
+                                       if reservadas_hoy else None),
+        },
+    }
+
+
 @app.get("/salud", response_model=Salud)
 async def salud(profundo: bool = False) -> Salud:
     """Chequeo rápido: ¿está vivo, y además puede hacer su trabajo?
@@ -1380,7 +1431,25 @@ async def _componer_respuesta(mensaje: MensajeEntrante, negocio: Tenant) -> str:
             }
         },
     )
+    # La conversación queda contada. Va DESPUÉS del `ainvoke` y antes del
+    # `return` porque acá está todo junto: el hilo, el negocio y el estado en
+    # que quedó. `registrar` se traga sus propios errores —regla del repo— así
+    # que esta línea no puede impedir que la persona reciba su respuesta.
+    estado = salida.get("estado") or ""
+    await metricas.registrar(
+        hilo, negocio.business_id, estado,
+        desenlace=_DESENLACE.get(estado))
+
     return salida["respuesta"]
+
+
+# Los dos únicos finales que cuentan como conversación cerrada por el bot. El
+# resto —incluido el abandono— no se escribe: se deduce al leer, mirando cuánto
+# hace que la conversación no dice nada. Ver `metricas.resumen`.
+_DESENLACE = {
+    Estado.CONFIRMADO.value: "reservado",
+    Estado.EN_MANOS_HUMANAS.value: "escalado",
+}
 
 
 async def _enviar(destino: str, negocio: Tenant, texto: str) -> None:

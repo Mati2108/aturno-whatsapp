@@ -930,6 +930,39 @@ async def t20_al_fallar_dice_que_si_entendio(g):
              "una persona" in s2["respuesta"], s2["respuesta"][-60:])
 
 
+async def t21_la_metrica_no_puede_tumbar_el_turno(g):
+    """Contar conversaciones es secundario. Reservar no.
+
+    La regla ya está escrita en `arranque.sh` —que no usa `set -e` a propósito—
+    y en Phoenix, que falla blando. Acá se verifica de punta a punta y no sólo
+    en el módulo: la llamada a `registrar` vive en el webhook, entre el grafo y
+    la respuesta, y es exactamente el lugar donde una excepción se llevaría
+    puesto un turno ya creado en aturno.
+    """
+    print(f"\n{NEGRITA}[21] SI LA MÉTRICA SE CAE, EL TURNO SE RESERVA IGUAL{FIN}")
+    print(f"{GRIS}  Lo secundario no puede tumbar lo principal.{FIN}")
+
+    from src import metricas as M
+
+    original, M._URL = M._URL, "postgresql://nadie@127.0.0.1:1/no-existe"
+    M.olvidar_pool()
+    try:
+        await hasta_el_resumen(g, "t21")
+        s = await g.ainvoke({"mensaje": "sí"}, _cfg("t21", "Ana Pérez"))
+        chequear("con la base de métricas caída, el turno se reserva",
+                 s["estado"] == Estado.CONFIRMADO.value, f"estado={s['estado']}")
+        chequear("y la persona recibe su código", "#" in s["respuesta"] or "código" in
+                 s["respuesta"].lower(), s["respuesta"][:60])
+
+        # Y leer tampoco explota: devuelve ceros, que es lo que hay.
+        vacio = await M.resumen()
+        chequear("y el resumen contesta ceros en vez de romper",
+                 vacio["cerradas"] == 0 and vacio["containment"] is None)
+    finally:
+        M._URL = original
+        M.olvidar_pool()
+
+
 async def main():
     doble = AturnoDoble()
     F.configurar(doble)
@@ -953,6 +986,7 @@ async def main():
     await t18_se_puede_corregir_el_nombre()
     await t19_todas_las_formas_de_negar_el_nombre()
     await t20_al_fallar_dice_que_si_entendio(g)
+    await t21_la_metrica_no_puede_tumbar_el_turno(g)
 
     print(f"\n{'─' * 58}")
     print(f"{VERDE}Todo en verde.{FIN}" if ok else f"{ROJO}Hay bordes rotos.{FIN}")
