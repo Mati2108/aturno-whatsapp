@@ -27,6 +27,7 @@ archivo de casos. Lo que se prueba es el guardián, no el modelo.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from collections import Counter
@@ -99,6 +100,78 @@ def t3_sin_dato_dice_lo_que_si_sabe() -> list[str]:
     return fallos
 
 
+def t4_redactar_solo_pasa_lo_verificado() -> list[str]:
+    """El modelo redacta, pero nada sale sin pasar por el guardián.
+
+    Con un modelo de mentira, para probar el CAMINO y no al modelo: qué pasa
+    cuando escribe bien, cuando inventa, cuando se rinde y cuando explota. Las
+    cuatro tienen que terminar en algo seguro.
+
+    La propiedad que se está protegiendo es una sola y vale la pena escribirla:
+    **el peor caso posible es el bot de antes.** No existe ninguna rama donde
+    esto deje a la persona peor que con el texto literal de siempre.
+    """
+    print(f"\n{NEGRITA}[4] REDACTAR: NADA SALE SIN PASAR EL GUARDIÁN{FIN}")
+    print(f"{GRIS}  Escribe bien, inventa, se rinde o explota. Las cuatro.{FIN}")
+
+    from src.redaccion import redactar
+
+    fallos = []
+
+    def chequear(nombre, cond, detalle=""):
+        marca = f"{VERDE}✓{FIN}" if cond else f"{ROJO}✗{FIN}"
+        print(f"  {marca} {nombre}" + (f"{GRIS}  ({detalle}){FIN}" if detalle else ""))
+        if not cond:
+            fallos.append(nombre)
+
+    class Falso:
+        """Un modelo que dice lo que le pidas."""
+
+        def __init__(self, respuesta): self._r = respuesta
+
+        async def ainvoke(self, _):
+            if isinstance(self._r, Exception):
+                raise self._r
+            class R: content = self._r
+            return R()
+
+    fuente = "Corte de pelo: 30 minutos, $8.000"
+    pregunta = "cuánto sale el corte?"
+
+    salio = asyncio.run(redactar(pregunta, fuente,
+                                 modelo=Falso("El corte sale $8.000 y lleva 30 minutos.")))
+    chequear("una respuesta buena sale tal cual", salio is not None, repr(salio))
+
+    inventa = asyncio.run(redactar(pregunta, fuente,
+                                   modelo=Falso("El corte sale $9.500.")))
+    chequear("una que inventa un precio NO sale", inventa is None, repr(inventa))
+
+    empatica = asyncio.run(redactar(pregunta, fuente,
+                                    modelo=Falso("¡Con gusto! Sale $8.000.")))
+    chequear("una con empatía actuada tampoco", empatica is None, repr(empatica))
+
+    rendido = asyncio.run(redactar(pregunta, fuente, modelo=Falso("NO_SE_PUEDE")))
+    chequear("si el modelo se rinde, devuelve None", rendido is None, repr(rendido))
+
+    roto = asyncio.run(redactar(pregunta, fuente,
+                                modelo=Falso(RuntimeError("sin crédito"))))
+    chequear("si el modelo explota, NO propaga la excepción", roto is None, repr(roto))
+
+    vacia = asyncio.run(redactar(pregunta, fuente, modelo=Falso("   ")))
+    chequear("una respuesta vacía tampoco sale", vacia is None, repr(vacia))
+
+    # Y sin fuente ni siquiera se le pregunta al modelo: sería pagarle por
+    # inventar desde cero, que es exactamente lo que no queremos.
+    class Explota:
+        async def ainvoke(self, _):
+            raise AssertionError("no tendría que haberse llamado al modelo")
+
+    sin_fuente = asyncio.run(redactar(pregunta, "", modelo=Explota()))
+    chequear("sin fuente NO se llama al modelo", sin_fuente is None)
+
+    return fallos
+
+
 def main() -> int:
     casos = cargar()
     prohibidas = [c for c in casos if c["veredicto"] == "rechazar"]
@@ -164,6 +237,12 @@ def main() -> int:
     if fallos_3:
         print(f"\n{ROJO}{NEGRITA}  El «no lo tengo» no dice de qué sí puede "
               f"hablar.{FIN}")
+        return 1
+
+    fallos_4 = t4_redactar_solo_pasa_lo_verificado()
+    if fallos_4:
+        print(f"\n{ROJO}{NEGRITA}  Hay un camino por el que algo sale sin "
+              f"verificar.{FIN}")
         return 1
 
     print(f"\n{VERDE}{NEGRITA}  El guardián atrapa todo lo prohibido y no frena "

@@ -28,6 +28,26 @@ CUATRO REGLAS, Y CADA UNA TIENE SU CLASE DE DAÑO
                    psicológica y baja la percepción de competencia
                    (USF, MIS Quarterly). Es el pecado 5 y hoy no se comete.
 
+LO QUE HAY QUE MANTENER
+-----------------------
+La regla 3 se apoya en una lista de palabras que no son datos —el andamiaje del
+idioma y los verbos frecuentes— y esa lista NO está completa ni puede estarlo.
+Cada verbo que el modelo use y no esté ahí frena una respuesta correcta.
+
+Es un desgaste real y hay que decirlo: con un negocio nuevo, con preguntas
+nuevas, van a aparecer verbos nuevos. Lo que lo hace sostenible es que el costo
+de equivocarse es barato y visible:
+
+· Frenar de más NO rompe nada: sale el texto literal, que es el bot de siempre.
+· Cada rechazo se loguea con la palabra y el texto entero, así que la lista
+  crece con evidencia y no con suposiciones.
+· El porcentaje de rechazo es un número que se mide (13% sobre 15 preguntas
+  reales al escribir esto). Si sube mucho, la función está degradada aunque
+  nada esté "roto", y ese es el momento de revisarla.
+
+Lo que NUNCA se agrega a la lista es un sustantivo. Los verbos son la forma de
+decir algo; los sustantivos son la cosa dicha, y ahí es donde vive la invención.
+
 LO QUE ESTE GUARDIÁN **NO** PUEDE ATRAPAR
 -----------------------------------------
 Está escrito acá para que nadie lo descubra confiando de más.
@@ -49,8 +69,11 @@ Por eso el diseño no se apoya sólo acá:
 
 from __future__ import annotations
 
+import logging
 import re
 import unicodedata
+
+logger = logging.getLogger(__name__)
 
 
 def _normalizar(texto: str) -> str:
@@ -167,15 +190,27 @@ mas más menos muy tambien también tampoco solo sólo ya aun aún todavia todav
 esto eso esta ese esa este pero entonces asi así
 desde hasta entre sobre bajo antes despues después
 vos usted te lo nos su sus mi tu
+local negocio
 """.split())
+# «local» y «negocio» entraron con evidencia, no por precaución: el modelo
+# escribió "los colectivos 24, 26, 71 y 92 paran cerca del local" sobre una
+# fuente que dice exactamente eso sin nombrar al local. Son referentes del
+# negocio al que la persona ya le está escribiendo, no datos sobre él.
 
 # Verbos y adverbios frecuentes que aparecen conjugados de mil formas. Se
 # comparan por prefijo porque "abren" (la pregunta) y "abrimos" (la respuesta)
 # son la misma palabra y una comparación exacta las trata como distintas.
-_VERBOS_COMUNES = ("abr", "cerr", "llev", "sal", "cost", "val", "ped", "avis",
+#
+# Crece con evidencia, nunca por precaución. "tard" entró porque el modelo
+# escribió "el corte tarda 30 minutos" sobre una fuente que dice "30 minutos" y
+# ningún verbo: el dato estaba entero y la respuesta se frenaba por el sinónimo.
+# Cada entrada de acá tiene que poder señalar el caso que la trajo, y ese caso
+# tiene que estar en `casos_invencion.jsonl`.
+_VERBOS_COMUNES = ("abr", "cerr", "llev", "tard", "sal", "cost", "val", "ped", "avis",
                    "vien", "ven", "ir", "va", "vas", "vam", "hac", "dec",
                    "quer", "nesit", "necesit", "empez", "termin", "dur",
                    "atend", "trabaj", "cobr", "acept", "lav", "cort", "reserv",
+                   "serv", "sirv", "recomend", "convien", "func",
                    "cancel", "program", "present", "qued", "estam", "encontr")
 
 _LARGO_MINIMO = 4   # por debajo de esto, una palabra no alcanza a ser un dato
@@ -285,3 +320,91 @@ def verificar(texto: str, fuente: str, pregunta: str = "") -> str | None:
             return motivo
 
     return None
+
+
+# ══════════════════════════════════════════════════════════════════
+#  Redactar — el único lugar donde el LLM escribe algo que lee una persona
+# ══════════════════════════════════════════════════════════════════
+
+# LO QUE SE LE PIDE AL MODELO ES REORDENAR, NO RESPONDER.
+#
+# La diferencia no es de estilo, es de riesgo. "Contestá esta pregunta" invita a
+# usar lo que el modelo sabe del mundo; "recortá este texto para que conteste
+# esta pregunta" lo deja sin nada más que la fuente. Todo lo que aparezca de
+# más queda al descubierto en la verificación, pero la mejor verificación es la
+# que casi nunca tiene que rechazar nada.
+#
+# La salida de emergencia es explícita: si el texto no contesta lo que le
+# preguntaron, el modelo dice NO_SE_PUEDE y sale el texto literal. Sin esa
+# puerta, un modelo obediente estira lo que hay hasta que parezca una respuesta.
+INSTRUCCIONES = """\
+Te doy la PREGUNTA de un cliente y el TEXTO que el negocio cargó.
+
+Devolvés ese texto reescrito para que conteste la pregunta. No lo contestás vos:
+lo reordenás.
+
+Reglas:
+- Usá SOLO lo que dice el TEXTO. Nada de lo que sepas por fuera, ni aunque sea obvio.
+- Lo que el texto no responde, no lo inventes: dejalo afuera.
+- Ningún número, precio, hora ni dirección que no esté en el TEXTO.
+- Si el texto niega algo, tu respuesta lo sigue negando.
+- Sin saludos, sin cordialidades, sin "espero que te sirva", sin decir que entendés
+  cómo se siente la persona. Directo, como contesta el dueño del local.
+- Una o dos oraciones. Sin markdown.
+- Si el TEXTO no alcanza para contestar la pregunta, devolvés exactamente: NO_SE_PUEDE
+
+PREGUNTA: {pregunta}
+
+TEXTO:
+{fuente}"""
+
+# El techo del mensaje. Dos oraciones entran de sobra; el default de 1024 nunca
+# se usa y se paga igual si el modelo se entusiasma.
+MAX_TOKENS = 160
+
+_SE_RINDE = "NO_SE_PUEDE"
+
+
+async def redactar(pregunta: str, fuente: str, modelo=None) -> str | None:
+    """Contesta la pregunta con el texto del negocio, o `None`.
+
+    `None` significa "usá el texto literal de siempre", y es lo que devuelve
+    ante cualquier duda: sin fuente, con el modelo caído, si el modelo se rinde,
+    o si lo que escribió no pasa `verificar`.
+
+    ESA ES LA PROPIEDAD QUE SOSTIENE TODO: el peor caso de esta función es el
+    bot de antes. No hay ninguna rama por la que la persona quede peor que
+    recibiendo el texto tal como lo cargó el negocio.
+
+    `modelo` se inyecta para poder probar los cuatro caminos —escribe bien,
+    inventa, se rinde, explota— sin llamar a ningún proveedor ni gastar un peso.
+    """
+    if not (fuente or "").strip():
+        return None
+
+    try:
+        if modelo is None:
+            from src.modelo import construir_modelo
+            modelo = construir_modelo(None, max_tokens=MAX_TOKENS, motivo="redactar")
+        salida = await modelo.ainvoke(
+            INSTRUCCIONES.format(pregunta=pregunta or "", fuente=fuente))
+        texto = (getattr(salida, "content", "") or "").strip()
+    except Exception as e:  # noqa: BLE001
+        # Igual que el clasificador: un proveedor caído no puede dejar sin
+        # contestar a nadie. Se cae al texto literal, que es la respuesta de
+        # siempre y es correcta.
+        logger.warning("no se pudo redactar (%s): %s", type(e).__name__, e)
+        return None
+
+    if not texto or texto.upper().startswith(_SE_RINDE):
+        return None
+
+    motivo = verificar(texto, fuente, pregunta)
+    if motivo:
+        # Se loguea SIEMPRE, y con el texto entero. Es la única forma de saber
+        # qué intenta colar el modelo, y de que un rechazo nuevo pueda entrar a
+        # `casos_invencion.jsonl` en vez de perderse.
+        logger.warning("redacción rechazada [%s] · %r", motivo, texto)
+        return None
+
+    return texto

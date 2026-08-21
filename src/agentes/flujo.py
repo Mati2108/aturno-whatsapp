@@ -70,6 +70,7 @@ from src.fechas import ahora
 from src.fechas import hoy as hoy_del_negocio
 from src.api.conversaciones import avisar_sin_respuesta
 from src.rag.indice import Recuperador, abrir_indice
+from src.redaccion import redactar
 from src.schemas import (
     Alternativa,
     DatosDelCliente,
@@ -584,10 +585,10 @@ async def avanzar(conv: Conversacion, config) -> dict:
         # proveedor de embeddings caído no es algo que la persona pueda
         # arreglar ni entender; que el bot no sepa un dato, sí.
         try:
-            texto = await _rag(negocio).contexto(consulta)
+            texto, fragmentos = await _rag(negocio).contexto_y_cuantos(consulta)
         except Exception:  # noqa: BLE001
             logger.warning("la búsqueda falló para %s", negocio, exc_info=True)
-            texto = ""
+            texto, fragmentos = "", 0
 
         # Sin texto, el negocio no tiene cargada esa respuesta. La pregunta va
         # al panel en vez de perderse: hasta ahora el bot decía "no lo tengo
@@ -601,7 +602,13 @@ async def avanzar(conv: Conversacion, config) -> dict:
         if not texto:
             asyncio.create_task(avisar_sin_respuesta(negocio, consulta))
 
-        return {"_plantilla": "info", "_datos": {"texto": texto}}
+        # `consulta` y `fragmentos` viajan para que `responder` pueda decidir si
+        # deja que el modelo reescriba esto. La pregunta hace falta para que la
+        # respuesta conteste lo que se preguntó; el número de fragmentos, para
+        # NO reescribir cuando la fuente son dos secciones distintas pegadas.
+        return {"_plantilla": "info",
+                "_datos": {"texto": texto, "consulta": consulta,
+                           "fragmentos": fragmentos}}
 
     if intent == Intencion.VOLVER:
         return {"estado": anterior(estado, saltear).value}
@@ -1334,9 +1341,29 @@ async def responder(conv: Conversacion, config) -> dict:
         # El cierre es el pedido del paso en el que está, no una frase suelta:
         # quien preguntó el precio a mitad de elegir el día tiene que volver a
         # ver los días, no un "¿te saco un turno?" que ya está en curso.
+        # ---- Contestar la pregunta que hicieron, no volcar la ficha ----
+        #
+        # Es el único lugar de todo el proyecto donde un modelo escribe algo que
+        # lee una persona, y por eso está rodeado de puertas:
+        #
+        #   · Sólo con UN fragmento. Con dos, la fuente son dos respuestas a dos
+        #     preguntas distintas y una reescritura las puede fundir en algo que
+        #     no dice ninguna. Ver `contexto_y_cuantos`.
+        #   · Nada sale sin pasar `verificar` — números, negaciones, vocabulario
+        #     y empatía. Ver `redaccion.py`.
+        #   · Y si algo falla —el modelo caído, el guardián lo rechaza, el
+        #     modelo se rinde— `redactar` devuelve None y sale el texto literal.
+        #
+        # O sea: el peor caso de esta rama es exactamente el bot de antes.
+        redactado = None
+        if datos.get("fragmentos") == 1:
+            redactado = await redactar(datos.get("consulta") or conv["mensaje"], texto)
+
+        cuerpo = redactado or P.respuesta_info(texto)
+
         paso = await _pedir_paso(conv, cfg, negocio, nombre_negocio,
                                  await _aturno.listar_servicios(negocio))
-        return {"respuesta": P.respuesta_info(texto) + "\n\n" + paso["respuesta"],
+        return {"respuesta": cuerpo + "\n\n" + paso["respuesta"],
                 "opciones": paso.get("opciones", [])}
 
     if especial == "silencio":

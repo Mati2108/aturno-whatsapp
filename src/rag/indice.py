@@ -442,6 +442,24 @@ class Recuperador:
                 vistos.append(seccion)
         return vistos
 
+    async def contexto_y_cuantos(self, consulta: str) -> tuple[str, int]:
+        """El texto, y de cuántos fragmentos salió.
+
+        El número importa para una sola decisión: si vale la pena dejar que un
+        modelo reescriba esto. Con UN fragmento la fuente habla de una sola
+        cosa. Con DOS —el tope de `MAX_FRAGMENTOS`— son dos respuestas a dos
+        preguntas distintas pegadas, y ahí una reescritura las puede fundir en
+        una afirmación que no está en ninguna de las dos: "el corte se paga en
+        efectivo" cuando una sección dice el precio y la otra las formas de
+        pago. Todas las palabras vendrían de la fuente, así que `verificar` no
+        lo vería.
+
+        Por eso con dos fragmentos sale el texto literal, que los muestra
+        separados y no afirma nada que el negocio no haya escrito.
+        """
+        docs = await self.buscar(consulta)
+        return self._limpiar(docs), len(docs)
+
     async def contexto(self, consulta: str) -> str:
         """Los fragmentos, listos para mandárselos a la persona.
 
@@ -467,6 +485,10 @@ class Recuperador:
           título dos veces en el mismo mensaje.
         """
         docs = await self.buscar(consulta)
+        return self._limpiar(docs)
+
+    def _limpiar(self, docs: list[Document]) -> str:
+        """Saca del markdown lo que no tiene que ver una persona."""
         if not docs:
             return ""
 
