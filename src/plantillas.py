@@ -57,6 +57,27 @@ def _dia_corto(d: date) -> str:
 # T1 · Apertura
 # ══════════════════════════════════════════════════════════════════
 
+def me_presento(negocio: str, nombre: str | None = None) -> str:
+    """Sólo quién es el bot. Para cuando la persona ya dijo qué quiere.
+
+    La apertura completa hace tres cosas: dice quién habla, muestra qué hace el
+    negocio, y pregunta qué necesita. Cuando alguien abre con «hola quiero el
+    servicio 1 para el miércoles», las dos últimas sobran — y no sobran a secas:
+    estorban.
+
+    Pasó en una demo. Ese mensaje devolvía el menú numerado 1 y 2, después
+    «¿Qué necesitás?», y abajo «¿Con quién lo querés?» numerado 1, 2 y 3. Dos
+    listas numeradas en la misma pantalla y dos preguntas distintas: si contesta
+    «1», ni ella sabe a cuál le contestó.
+
+    Lo que sí queda es la presentación, porque ese trabajo no lo hizo nadie
+    todavía: quien escribe por primera vez tiene que saber con quién está
+    hablando antes de que le pidan un dato.
+    """
+    saludo = f"Hola {nombre}!" if nombre else "Hola!"
+    return f"{saludo} Soy el asistente de {negocio}."
+
+
 def apertura(negocio: str, servicios: list[Servicio], nombre: str | None = None) -> str:
     """El primer mensaje. Sesión nueva o expirada dispara SIEMPRE este texto.
 

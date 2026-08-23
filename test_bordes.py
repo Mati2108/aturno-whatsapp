@@ -1292,6 +1292,60 @@ async def t26_una_pregunta_no_es_un_nombre(g):
              f"nombre={c.get('nombre')} turno={c.get('nombre_del_turno')}")
 
 
+async def t27_la_apertura_no_repregunta_lo_que_ya_dijo(g, doble):
+    """Si el primer mensaje ya dijo qué quiere, la apertura no muestra el menú.
+
+    Salió en una demo real. La persona abrió con «hola quiero el servicio 1
+    para el miércoles» y recibió, en UN mensaje:
+
+        · el menú entero de servicios, numerado 1 y 2
+        · «¿Qué necesitás?»
+        · y abajo «Servicio 1. ¿Con quién lo querés?», numerado 1, 2 y 3
+
+    Dos listas numeradas en la misma pantalla, y una pregunta abierta seguida de
+    otra pregunta distinta. Si contesta «1», ni ella sabe a cuál le contestó.
+
+    La apertura tiene tres trabajos —decir quién es el bot, mostrar qué hace el
+    negocio, y preguntar qué necesita— y cuando la persona YA dijo qué necesita,
+    los dos últimos sobran. Queda el primero, que es el que sigue haciendo
+    falta: alguien que escribe por primera vez tiene que saber con quién habla.
+    """
+    print(f"\n{NEGRITA}[27] SI YA DIJO QUÉ QUIERE, LA APERTURA NO REPREGUNTA{FIN}")
+    print(f"{GRIS}  «quiero el servicio 1 para el miércoles» daba dos listas juntas.{FIN}")
+
+    servicios = await doble.listar_servicios(NEG)
+    manana = (dt.date.today() + dt.timedelta(days=1)).isoformat()
+
+    conv = {"mensaje": "hola quiero un corte para mañana",
+            "estado": Estado.APERTURA.value,
+            "intent": Intencion.ELEGIR_SERVICIO.value,
+            "entidades": {"servicio": servicios[0].nombre, "fecha": manana},
+            "opciones": [], "sin_entender": 0}
+    salida = await F.responder({**conv, **await F.avanzar(conv, _cfg("t27"))}, _cfg("t27"))
+    texto = salida["respuesta"]
+
+    chequear("sigue diciendo quién es", "Soy el asistente" in texto, texto[:50])
+    chequear("NO muestra el menú de servicios que ya eligió",
+             "Esto es lo que hacemos" not in texto, texto[:80])
+    chequear("NO pregunta «¿Qué necesitás?» después de que se lo dijo",
+             "¿Qué necesitás?" not in texto)
+    chequear("y pide el paso que sí falta", "¿Con quién" in texto, texto[-90:])
+
+    # Una sola lista numerada. Dos en el mismo mensaje es lo que rompía.
+    chequear("hay UNA sola lista para elegir",
+             texto.count("Respondé con el número") == 1,
+             f"{texto.count('Respondé con el número')} listas")
+
+    # Y quien no dijo nada sigue recibiendo la apertura completa.
+    conv2 = {"mensaje": "hola", "estado": Estado.APERTURA.value,
+             "intent": Intencion.SALUDO.value, "entidades": {},
+             "opciones": [], "sin_entender": 0}
+    s2 = await F.responder({**conv2, **await F.avanzar(conv2, _cfg("t27b"))}, _cfg("t27b"))
+    chequear("un «hola» pelado sí recibe el menú entero",
+             "Esto es lo que hacemos" in s2["respuesta"])
+    chequear("y la pregunta abierta", "¿Qué necesitás?" in s2["respuesta"])
+
+
 async def main():
     doble = AturnoDoble()
     F.configurar(doble)
@@ -1321,6 +1375,7 @@ async def main():
     await t24_buscador_caido_no_es_dato_faltante(g)
     await t25_no_se_tira_lo_que_ya_dijo(g, doble)
     await t26_una_pregunta_no_es_un_nombre(g)
+    await t27_la_apertura_no_repregunta_lo_que_ya_dijo(g, doble)
 
     print(f"\n{'─' * 58}")
     print(f"{VERDE}Todo en verde.{FIN}" if ok else f"{ROJO}Hay bordes rotos.{FIN}")

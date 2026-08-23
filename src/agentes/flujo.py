@@ -1466,15 +1466,25 @@ async def responder(conv: Conversacion, config) -> dict:
 
     if especial == "apertura":
         servicios = await _aturno.listar_servicios(negocio)
-        cabecera = P.apertura(nombre_negocio, servicios, cfg.get("nombre_cliente"))
         if estado == Estado.ESPERANDO_SERVICIO:
-            return {"respuesta": cabecera, "opciones": [s.nombre for s in servicios]}
+            return {"respuesta": P.apertura(nombre_negocio, servicios,
+                                            cfg.get("nombre_cliente")),
+                    "opciones": [s.nombre for s in servicios]}
 
-        # El negocio vende un solo servicio, así que ese paso no existe y el
-        # estado ya avanzó. El saludo se pega con el pedido del paso REAL, en
-        # un mismo mensaje: si saliera solo, las opciones guardadas serían las
-        # de servicios y el "1" del mensaje siguiente apuntaría a otra lista.
+        # El estado ya pasó el servicio: o el negocio vende uno solo, o la
+        # persona dijo cuál quería en este mismo mensaje.
+        #
+        # Acá va la presentación CORTA, no la apertura entera. La apertura
+        # muestra el menú y pregunta «¿Qué necesitás?», y las dos cosas estorban
+        # cuando la persona ya contestó eso: quedaban dos listas numeradas en la
+        # misma pantalla y dos preguntas distintas. Contestar «1» ahí es una
+        # lotería. Ver `me_presento`.
+        #
+        # Y va PEGADO al pedido del paso, en un solo mensaje: si el saludo
+        # saliera solo, las opciones guardadas serían las de servicios y el "1"
+        # del mensaje siguiente apuntaría a otra lista.
         paso = await _pedir_paso(conv, cfg, negocio, nombre_negocio, servicios)
+        cabecera = P.me_presento(nombre_negocio, cfg.get("nombre_cliente"))
         return {"respuesta": f"{cabecera}\n\n{paso['respuesta']}",
                 "opciones": paso.get("opciones", [])}
 
