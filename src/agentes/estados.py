@@ -368,6 +368,21 @@ def nombre_propio(texto: str) -> str | None:
     Por eso se exige que TODAS las palabras parezcan nombre. Basta una del
     vocabulario del flujo para soltar el mensaje.
     """
+    # Una pregunta no es un nombre, aunque tenga forma de nombre.
+    #
+    # Salió corriendo el guion de una demo: en «¿cómo te llamás?» alguien
+    # escribe «hacen depilación láser?» —tres palabras, sin números, ninguna en
+    # la lista de vocabulario del flujo— y el resumen decía «Para: Hacen
+    # Depilación Láser?». Nadie se llama así, y si no lo mira en el resumen, el
+    # negocio recibe un turno a nombre de una pregunta.
+    #
+    # El signo se mira sobre el texto CRUDO: `_normalizar` lo borra, así que
+    # cualquier chequeo posterior llega tarde. Y va antes que todo lo demás
+    # porque es barato y no tiene falsos positivos: nadie escribe su nombre con
+    # un signo de pregunta.
+    if "?" in (texto or "") or "¿" in (texto or ""):
+        return None
+
     limpio = _normalizar(texto)
     if not limpio:
         return None

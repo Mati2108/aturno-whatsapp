@@ -1249,6 +1249,49 @@ async def t25_no_se_tira_lo_que_ya_dijo(g, doble):
              f"prof={c.get('profesional_id')} fecha={c.get('fecha')}")
 
 
+async def t26_una_pregunta_no_es_un_nombre(g):
+    """Preguntar algo en el paso del nombre no puede quedar como tu nombre.
+
+    Salió corriendo el guion de una demo: en «¿cómo te llamás?» alguien escribe
+    «hacen depilación láser?» y el resumen decía
+
+        Para: Hacen Depilación Láser?
+
+    Nadie se llama así, y la persona lo ve recién en el resumen — o no lo ve, y
+    el negocio recibe un turno a nombre de una pregunta.
+
+    Pasaba porque el atajo de nombres mira si el texto PARECE un nombre —dos o
+    tres palabras, sin números, ninguna en la lista de palabras que no son
+    nombres— y una pregunta corta pasa ese filtro sin problema. El signo de
+    pregunta es la señal que faltaba mirar.
+    """
+    print(f"\n{NEGRITA}[26] UNA PREGUNTA NO ES UN NOMBRE{FIN}")
+    print(f"{GRIS}  «Para: Hacen Depilación Láser?» — salió de verdad.{FIN}")
+
+    from src.agentes.estados import nombre_propio
+
+    for pregunta in ("hacen depilación láser?", "cuánto sale?", "aceptan tarjeta?",
+                     "¿dónde quedan?", "tienen estacionamiento?",
+                     "puedo pagar en cuotas?"):
+        chequear(f"«{pregunta}» no se toma como nombre",
+                 nombre_propio(pregunta) is None, repr(nombre_propio(pregunta)))
+
+    # Y los nombres de verdad siguen entrando, incluidos los raros.
+    for nombre in ("Matías Calo", "Ana", "María José Pérez", "Pitu Ehrman",
+                   "me llamo Lucas", "soy Juan Cruz"):
+        chequear(f"«{nombre}» sigue siendo un nombre",
+                 nombre_propio(nombre) is not None, repr(nombre_propio(nombre)))
+
+    # De punta a punta: preguntar en el paso del nombre CONTESTA la pregunta.
+    conv = {"mensaje": "hacen depilación láser?", "estado": Estado.ESPERANDO_NOMBRE.value,
+            "intent": Intencion.CONSULTAR_INFO.value, "entidades": {},
+            "opciones": [], "sin_entender": 0}
+    c = await F.avanzar(conv, _cfg("t26"))
+    chequear("y en el flujo no queda guardada como nombre",
+             not c.get("nombre") and not c.get("nombre_del_turno"),
+             f"nombre={c.get('nombre')} turno={c.get('nombre_del_turno')}")
+
+
 async def main():
     doble = AturnoDoble()
     F.configurar(doble)
@@ -1277,6 +1320,7 @@ async def main():
     await t23_otro_turno_no_es_otro_horario(g)
     await t24_buscador_caido_no_es_dato_faltante(g)
     await t25_no_se_tira_lo_que_ya_dijo(g, doble)
+    await t26_una_pregunta_no_es_un_nombre(g)
 
     print(f"\n{'─' * 58}")
     print(f"{VERDE}Todo en verde.{FIN}" if ok else f"{ROJO}Hay bordes rotos.{FIN}")
