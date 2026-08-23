@@ -728,6 +728,10 @@ def solo_adjunto(tipo: str = "") -> str:
     entre "no puedo escuchar audios" y "no entendí" es que la primera explica
     por qué y la segunda parece que la persona se explicó mal.
     """
+    # `tipo` puede llegar vacío o en None: Twilio no siempre manda el
+    # content-type, y una plantilla que revienta deja a la persona sin ninguna
+    # respuesta — que es exactamente el agujero que esta función vino a tapar.
+    tipo = tipo or ""
     if tipo.startswith("audio"):
         que = "Todavía no puedo escuchar audios"
     elif tipo.startswith("image"):
