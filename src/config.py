@@ -113,6 +113,19 @@ class Config(BaseSettings):
     #
     # El default de 10 sale de los límites de respuesta de Nielsen: es el techo
     # para que alguien mantenga la atención puesta en un diálogo.
+    # Cuánto tiene que durar, como mínimo, el "escribiendo…" antes de que salga
+    # la respuesta. No es una demora artificial por capricho: el 88% de los
+    # mensajes se resuelven sin modelo y contestan al instante, así que el
+    # indicador aparece y desaparece antes de que nadie lo vea — y desde afuera
+    # se lee como que el bot "a veces no avisa".
+    #
+    # En WhatsApp esto no cuesta nada: es un canal asincrónico y la tolerancia a
+    # la demora es altísima. Lo que sí cuesta es contestar en cero: una
+    # respuesta instantánea a una frase escrita a mano se lee como una máquina.
+    #
+    # En 0 se apaga.
+    escribiendo_segundos: float = 1.2
+
     aviso_segundos: int = 10
     techo_segundos: int = 30
 

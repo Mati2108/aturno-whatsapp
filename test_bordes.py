@@ -1346,6 +1346,39 @@ async def t27_la_apertura_no_repregunta_lo_que_ya_dijo(g, doble):
     chequear("y la pregunta abierta", "¿Qué necesitás?" in s2["respuesta"])
 
 
+async def t28_el_indicador_alcanza_a_verse():
+    """El «escribiendo…» tiene que durar lo suficiente para verse.
+
+    El indicador se prende al empezar a procesar y WhatsApp lo apaga solo
+    cuando llega la respuesta. Con el 88% de los mensajes resueltos sin modelo
+    —un número, un «sí»— la respuesta sale casi al instante y el indicador
+    aparece y desaparece antes de que nadie lo registre. Desde afuera se lee
+    como «solo funciona para algunos mensajes».
+
+    La solución no es acelerar nada: es esperar un poquito antes de contestar
+    lo que ya está listo. Suena al revés, pero en WhatsApp la tolerancia a la
+    demora es altísima —es un canal asincrónico— y una respuesta instantánea a
+    una frase escrita a mano se lee como una máquina, no como alguien atendiendo.
+
+    Lo que se prueba acá es la cuenta, no el reloj: un test que duerme de verdad
+    tarda y falla los días que la máquina va lenta.
+    """
+    print(f"\n{NEGRITA}[28] EL «ESCRIBIENDO…» ALCANZA A VERSE{FIN}")
+    print(f"{GRIS}  Sin piso, en el 88% de los mensajes aparece y se va.{FIN}")
+
+    from src.api.webhook import _falta_para_que_se_vea as falta
+
+    piso = 1.2
+    chequear("si la respuesta salió al instante, espera casi todo el piso",
+             abs(falta(0.0, piso) - piso) < 0.01, f"{falta(0.0, piso):.2f}s")
+    chequear("si tardó la mitad, espera la otra mitad",
+             abs(falta(0.6, piso) - 0.6) < 0.01, f"{falta(0.6, piso):.2f}s")
+    chequear("si ya tardó más que el piso, NO agrega nada",
+             falta(3.0, piso) == 0.0, f"{falta(3.0, piso):.2f}s")
+    chequear("y con el piso en cero nunca espera",
+             falta(0.0, 0) == 0.0, f"{falta(0.0, 0):.2f}s")
+
+
 async def main():
     doble = AturnoDoble()
     F.configurar(doble)
@@ -1376,6 +1409,7 @@ async def main():
     await t25_no_se_tira_lo_que_ya_dijo(g, doble)
     await t26_una_pregunta_no_es_un_nombre(g)
     await t27_la_apertura_no_repregunta_lo_que_ya_dijo(g, doble)
+    await t28_el_indicador_alcanza_a_verse()
 
     print(f"\n{'─' * 58}")
     print(f"{VERDE}Todo en verde.{FIN}" if ok else f"{ROJO}Hay bordes rotos.{FIN}")

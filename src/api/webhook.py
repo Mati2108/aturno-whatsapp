@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import logging
+import time
 from time import monotonic as _monotonic
 
 import httpx
@@ -1014,6 +1015,21 @@ async def _verificar_firma(request: Request, firma: str) -> None:
 
 
 # ---------- El trabajo de fondo ----------
+def _falta_para_que_se_vea(tardo: float, piso: float) -> float:
+    """Cuánto falta esperar para que el «escribiendo…» alcance a verse.
+
+    WhatsApp apaga el indicador en cuanto llega la respuesta. Cuando el mensaje
+    se resuelve sin modelo —un número, un «sí», el 88% de los casos— la
+    respuesta sale casi en cero y el indicador aparece y se va en el mismo
+    instante. Visto de afuera: "el bot a veces no avisa que está escribiendo".
+
+    Separado en una función propia para poder probar la cuenta sin dormir de
+    verdad: un test que espera un segundo tarda un segundo y falla el día que la
+    máquina va lenta.
+    """
+    return max(0.0, (piso or 0.0) - tardo)
+
+
 async def _mostrar_escribiendo(message_sid: str) -> None:
     """Prende el "escribiendo…" nativo de WhatsApp mientras el agente piensa.
 
@@ -1198,6 +1214,7 @@ async def _procesar_bajo_candado(
     cfg = config()
     codigo_senia = None
     datos_senia: dict = {}
+    empezo = time.monotonic()
     await _mostrar_escribiendo(message_sid)
     salidas = _salidas_de_emergencia(negocio)
 
@@ -1281,6 +1298,13 @@ async def _procesar_bajo_candado(
     if not (texto or "").strip():
         logger.info("sin respuesta para %s (conversación escalada)", mensaje.de)
         return
+
+    # Que el "escribiendo…" alcance a verse. Ver `_falta_para_que_se_vea`: sin
+    # esto, los mensajes que se resuelven sin modelo contestan tan rápido que el
+    # indicador nunca llega a dibujarse.
+    espera = _falta_para_que_se_vea(time.monotonic() - empezo, cfg.escribiendo_segundos)
+    if espera:
+        await asyncio.sleep(espera)
 
     await _enviar(mensaje.de, negocio, texto)
     await avisar_a_aturno(evento(
