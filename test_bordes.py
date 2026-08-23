@@ -1114,6 +1114,118 @@ async def t24_buscador_caido_no_es_dato_faltante(g):
         F._rag, F.avisar_sin_respuesta = orig_rag, orig_avisar
 
 
+async def t25_no_se_tira_lo_que_ya_dijo(g, doble):
+    """Lo que la persona ya dijo NO se vuelve a preguntar.
+
+    El clasificador entiende «necesito cortarme el pelo el viernes a la tarde»
+    entero: devuelve servicio, fecha y hora en la misma respuesta, y ya está
+    paga. El flujo agarraba el servicio, avanzaba UN paso y tiraba el resto —
+    así que a esa persona le preguntaba el día que acababa de decir.
+
+    Es el pecado 8 de la investigación: demasiadas preguntas antes de mostrar
+    algo. "Si tu chatbot hace diez preguntas antes de que el cliente vea un solo
+    horario, lo perdés."
+
+    DOS BARANDAS, y las dos son la razón de que esto sea seguro:
+
+      · Se avanza SÓLO mientras cada paso resuelva sin ambigüedad. `_resolver`
+        ya devuelve None cuando el nombre coincide con dos servicios o con
+        ninguno, y ahí se frena y se muestra la lista.
+      · NUNCA se llega solo a la confirmación. El resumen sigue estando siempre,
+        y nada se reserva sin que la persona diga que sí.
+    """
+    print(f"\n{NEGRITA}[25] LO QUE YA DIJO NO SE VUELVE A PREGUNTAR{FIN}")
+    print(f"{GRIS}  El clasificador ya lo entendió entero. No se tira.{FIN}")
+
+    servicios = await doble.listar_servicios(NEG)
+    gente = await doble.listar_personal(NEG)
+    manana = (dt.date.today() + dt.timedelta(days=1)).isoformat()
+
+    async def con(entidades, estado=Estado.ESPERANDO_SERVICIO,
+                  intent=Intencion.ELEGIR_SERVICIO, mensaje="quiero un corte"):
+        conv = {"mensaje": mensaje, "estado": estado.value, "intent": intent.value,
+                "entidades": entidades, "opciones": [], "sin_entender": 0,
+                "servicio_id": None, "profesional_id": None, "fecha": None,
+                "hora": None, "desde_horario": 0}
+        return await F.avanzar(conv, _cfg("t25"))
+
+    # ---- Servicio + día, con el paso del profesional en el medio ----
+    #
+    # Acá NO se puede saltar al horario de una: quién te atiende es una elección
+    # que la persona no hizo. Lo que sí tiene que pasar es que el día NO se
+    # pierda — y que cuando elija al profesional, el bot salte el día solo.
+    c = await con({"servicio": servicios[0].nombre, "fecha": manana})
+    chequear("frena en el profesional, que no eligió",
+             c.get("estado") == Estado.ESPERANDO_STAFF.value, f"paso={c.get('estado')}")
+    chequear("pero NO tira el día: lo guarda para su paso",
+             (c.get("_pendientes") or {}).get("fecha") == manana,
+             str(c.get("_pendientes")))
+
+    # Y de punta a punta: elige al profesional y el día ya no se pregunta.
+    s1 = await g.ainvoke({"mensaje": "hola"}, _cfg("t25e"))
+    conv2 = {"mensaje": "un corte", "estado": Estado.ESPERANDO_SERVICIO.value,
+             "intent": Intencion.ELEGIR_SERVICIO.value,
+             "entidades": {"servicio": servicios[0].nombre, "fecha": manana},
+             "opciones": [], "sin_entender": 0}
+    c2 = await F.avanzar(conv2, _cfg("t25e"))
+    conv3 = {**conv2, **c2, "mensaje": gente[0].nombre,
+             "intent": Intencion.ELEGIR_STAFF.value,
+             "entidades": {"profesional": gente[0].nombre}}
+    c3 = await F.avanzar(conv3, _cfg("t25e"))
+    chequear("al elegir al profesional, el día YA está y no se pregunta",
+             c3.get("fecha") == manana and c3.get("estado") == Estado.ESPERANDO_HORARIO.value,
+             f"fecha={c3.get('fecha')} paso={c3.get('estado')}")
+
+    # ---- Servicio + profesional + día ----
+    c = await con({"servicio": servicios[0].nombre, "profesional": gente[0].nombre,
+                   "fecha": manana})
+    chequear("con los tres, también guarda al profesional",
+             c.get("profesional_id") == gente[0].id, str(c.get("profesional_id")))
+
+    # ---- Una franja NO elige el horario por la persona ----
+    #
+    # "a la tarde" le llega al clasificador como hora=14:00, pero la persona no
+    # dijo las 14: dijo la tarde. Reservarle las 14 sería elegir por ella.
+    c = await con({"servicio": servicios[0].nombre, "fecha": manana, "hora": "14:00"},
+                  mensaje="quiero un corte mañana a la tarde")
+    chequear("«a la tarde» ni siquiera se guarda como hora",
+             "hora" not in (c.get("_pendientes") or {}), str(c.get("_pendientes")))
+
+    # ---- Pero una hora escrita con números SÍ vale ----
+    c = await con({"servicio": servicios[0].nombre, "profesional": gente[0].nombre,
+                   "fecha": manana, "hora": "10:00"},
+                  mensaje="quiero un corte con Lean mañana a las 10")
+    chequear("«a las 10» sí se toma", c.get("hora") == "10:00", str(c.get("hora")))
+    chequear("y ahí sí llega hasta el nombre o el resumen",
+             c.get("estado") in (Estado.ESPERANDO_NOMBRE.value,
+                                 Estado.ESPERANDO_CONFIRMACION.value),
+             f"paso={c.get('estado')}")
+
+    # ---- Un servicio ambiguo frena y muestra la lista ----
+    c = await con({"servicio": "algo", "fecha": manana})
+    chequear("un servicio que no existe NO avanza a ciegas",
+             c.get("_plantilla") == "no_entendi" or c.get("servicio_id") is None,
+             str(c)[:60])
+
+    # ---- Y NUNCA se reserva solo ----
+    c = await con({"servicio": servicios[0].nombre, "profesional": gente[0].nombre,
+                   "fecha": manana, "hora": "10:00", "nombre": "Ana Pérez"},
+                  mensaje="corte con Lean mañana a las 10, soy Ana Pérez")
+    chequear("con TODO junto, igual para en la confirmación",
+             c.get("estado") == Estado.ESPERANDO_CONFIRMACION.value, f"paso={c.get('estado')}")
+    chequear("y NO reservó nada todavía", not c.get("codigo"), str(c.get("codigo")))
+
+    # ---- Un número suelto no se aplica a todos los pasos ----
+    #
+    # "1" trae `_indice` y significa "el renglón 1 de la lista que estoy
+    # viendo". Aplicarlo también al paso siguiente elegiría el profesional 1 y
+    # el día 1 sin que nadie los haya mirado.
+    c = await con({"_indice": 0}, mensaje="1")
+    chequear("un «1» elige el servicio y NADA más",
+             c.get("profesional_id") is None and c.get("fecha") is None,
+             f"prof={c.get('profesional_id')} fecha={c.get('fecha')}")
+
+
 async def main():
     doble = AturnoDoble()
     F.configurar(doble)
@@ -1141,6 +1253,7 @@ async def main():
     await t22_ninguna_lista_vacia_pide_un_numero(g)
     await t23_otro_turno_no_es_otro_horario(g)
     await t24_buscador_caido_no_es_dato_faltante(g)
+    await t25_no_se_tira_lo_que_ya_dijo(g, doble)
 
     print(f"\n{'─' * 58}")
     print(f"{VERDE}Todo en verde.{FIN}" if ok else f"{ROJO}Hay bordes rotos.{FIN}")

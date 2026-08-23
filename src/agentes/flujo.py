@@ -228,6 +228,17 @@ class Conversacion(TypedDict):
     intent: NotRequired[str]
     entidades: NotRequired[dict]
 
+    # Lo que la persona dijo y todavía no le tocó usarse.
+    #
+    # «un corte el viernes» nombra el servicio y el día, pero entre los dos está
+    # el paso del profesional, que no nombró. Sin guardar la fecha acá, el bot
+    # le pregunta el día después de que elija a la persona — el día que ya
+    # había dicho dos mensajes antes.
+    #
+    # Se guarda sólo lo que apunta a pasos que TODAVÍA no pasaron: arrastrar un
+    # dato viejo a un pedido nuevo sería peor que preguntarlo.
+    _pendientes: NotRequired[dict | None]
+
     # Claves de un solo turno: `avanzar` le avisa a `responder` que use una
     # plantilla puntual en vez de la del paso. Van declaradas porque LangGraph
     # descarta cualquier clave que no esté en el esquema — se perdían en
@@ -761,7 +772,9 @@ async def avanzar(conv: Conversacion, config) -> dict:
     if intent != AVANZA_CON.get(estado):
         return {}  # no corresponde a este paso: se repite el pedido
 
-    resuelto = await _resolver(estado, conv, ent, negocio, cfg)
+    # Lo de este mensaje pisa lo guardado: si cambió de idea, manda lo último.
+    recordado = {**(conv.get("_pendientes") or {}), **ent}
+    resuelto = await _resolver(estado, conv, recordado, negocio, cfg)
     if resuelto is None:
         # Se entendió la intención pero no a qué apuntaba: nombró un servicio
         # que no existe, o uno que coincide con dos. Se repite el pedido y se
@@ -784,7 +797,139 @@ async def avanzar(conv: Conversacion, config) -> dict:
         cambios["desde_horario"] = 0
 
     cambios["estado"] = siguiente(estado, saltear).value
+
+    # ---- Seguir avanzando con lo que la persona YA dijo ----
+    #
+    # «necesito cortarme el pelo el viernes a la tarde» le llega al clasificador
+    # entero: devuelve servicio, fecha y hora en la MISMA respuesta, y ya está
+    # paga. Hasta acá se guardaba el servicio, se avanzaba un paso y el resto se
+    # tiraba — así que a esa persona el bot le preguntaba el día que acababa de
+    # decir. Es el pecado 8 de la investigación, y el que más hace abandonar:
+    # "si tu chatbot hace diez preguntas antes de que el cliente vea un solo
+    # horario, lo perdés".
+    #
+    # No hace falta que el modelo haga más: hace falta dejar de tirar lo que ya
+    # hizo. Por eso esto no agrega ni una llamada.
+    cambios.update(await _seguir_con_lo_dicho(
+        {**conv, **cambios}, recordado, negocio, cfg, saltear))
     return cambios
+
+
+# Un número suelto vale para UNA lista, la que se está mirando.
+#
+# "1" llega como `_indice` y significa "el renglón 1 de esto que tengo delante".
+# Arrastrarlo a los pasos siguientes elegiría el profesional 1 y el día 1 sin
+# que nadie los haya visto — y con la misma cara de haber entendido.
+_SOLO_DEL_PASO_ACTUAL = ("_indice", "_rechazo")
+
+
+async def _seguir_con_lo_dicho(
+    conv: Conversacion, ent: dict, negocio: str, cfg: dict, saltear: set[Estado]
+) -> dict:
+    """Avanza todos los pasos que las entidades de ESTE mensaje ya resuelvan.
+
+    Dos barandas, y son la razón de que esto sea seguro:
+
+      · Se avanza SÓLO mientras cada paso resuelva sin ambigüedad. `_resolver`
+        ya devuelve `None` cuando el nombre coincide con dos servicios o con
+        ninguno; ahí se frena y la persona ve la lista, como siempre.
+      · NUNCA se llega solo a la confirmación desde acá... y si se llega, el
+        resumen igual está: `ESPERANDO_CONFIRMACION` no reserva nada hasta que
+        alguien diga que sí. El salto puede ahorrar pasos, nunca decisiones.
+    """
+    resto = {k: v for k, v in (ent or {}).items() if k not in _SOLO_DEL_PASO_ACTUAL}
+
+    # La hora se descarta acá y no más adelante, y ese es el lugar correcto.
+    #
+    # «a la tarde» le llega al clasificador y vuelve como `hora: 14:00`. Pero la
+    # persona no dijo las 14 — dijo la tarde. Tomarlo como una hora exacta sería
+    # elegirle el turno, que es justo lo que no puede hacer un bot que le pide
+    # confirmación para todo lo demás.
+    #
+    # La regla: una hora vale sólo si la persona escribió un número. Filtrarlo
+    # ACÁ significa que una hora que no vale tampoco se guarda para después, y
+    # entonces `_lo_dijo_para` no tiene que volver a mirar el mensaje crudo dos
+    # turnos más tarde, cuando ya es otro.
+    if resto.get("hora") and not any(c.isdigit() for c in conv.get("mensaje", "")):
+        resto.pop("hora")
+
+    if not resto:
+        return {"_pendientes": None}
+
+    cambios: dict = {}
+    paso = Estado(conv["estado"])
+
+    # Tope duro: la máquina tiene seis pasos. Si esto llegara a girar, gira
+    # seis veces y sale — un bot trabado es peor que uno que pregunta de más.
+    for _ in range(len(ORDEN)):
+        if paso in (Estado.ESPERANDO_CONFIRMACION, Estado.CONFIRMADO):
+            break
+        if not _lo_dijo_para(paso, resto, conv):
+            break
+
+        resuelto = await _resolver(paso, conv, resto, negocio, cfg)
+        if not resuelto or "_rechazo" in resuelto:
+            # No se pudo, o lo que pidió no está disponible. Se frena acá y el
+            # paso se le pregunta normalmente: explicar por qué no hay lugar es
+            # trabajo del paso, no de este atajo.
+            break
+
+        cambios.update(resuelto)
+        conv = {**conv, **resuelto}
+        paso = siguiente(paso, saltear)
+        cambios["estado"] = paso.value
+
+    # Lo que sobró se guarda para cuando llegue su paso. Sin esto, «un corte el
+    # viernes» perdía el viernes al frenarse en el profesional, y el bot le
+    # preguntaba el día que la persona ya había dicho.
+    cambios["_pendientes"] = _para_mas_adelante(resto, paso) or None
+    return cambios
+
+
+# Qué paso contesta cada dato. Es el mapa inverso de `_lo_dijo_para`, y existe
+# para poder decidir qué guardar: un dato de un paso que ya pasó no se guarda —
+# arrastrarlo a un pedido nuevo sería peor que volver a preguntarlo.
+_PASO_DEL_DATO = {
+    "servicio": Estado.ESPERANDO_SERVICIO,
+    "profesional": Estado.ESPERANDO_STAFF,
+    "fecha": Estado.ESPERANDO_DIA,
+    "hora": Estado.ESPERANDO_HORARIO,
+    "nombre": Estado.ESPERANDO_NOMBRE,
+}
+
+
+def _para_mas_adelante(ent: dict, paso: Estado) -> dict:
+    """Los datos que apuntan a un paso que todavía no llegó."""
+    if paso not in ORDEN:
+        return {}
+    falta = ORDEN.index(paso)
+    return {k: v for k, v in ent.items()
+            if k in _PASO_DEL_DATO and ORDEN.index(_PASO_DEL_DATO[k]) >= falta}
+
+
+def _lo_dijo_para(paso: Estado, ent: dict, conv: Conversacion) -> bool:
+    """¿La persona dijo algo que sirva para ESTE paso? Sin adivinar.
+
+    El caso que obliga a mirar el mensaje crudo y no sólo la entidad: «a la
+    tarde» le llega al clasificador y vuelve como `hora: 14:00`. Pero la persona
+    no dijo las 14 — dijo la tarde. Tomarlo como una hora exacta sería elegirle
+    el turno, que es justo lo que no puede hacer un bot que pide confirmación
+    para todo lo demás.
+
+    La regla: una hora sólo se toma si la persona escribió un número. «a las 10»
+    vale, «a la tarde» no. Es una heurística, y por eso el default es no tomarla.
+    """
+    if paso == Estado.ESPERANDO_SERVICIO:
+        return bool(ent.get("servicio"))
+    if paso == Estado.ESPERANDO_STAFF:
+        return bool(ent.get("profesional"))
+    if paso == Estado.ESPERANDO_DIA:
+        return bool(ent.get("fecha"))
+    if paso == Estado.ESPERANDO_HORARIO:
+        return bool(ent.get("hora"))
+    if paso == Estado.ESPERANDO_NOMBRE:
+        return bool(ent.get("nombre"))
+    return False
 
 
 async def _abrir(saltear: set[Estado], negocio: str) -> dict:
