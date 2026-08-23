@@ -912,22 +912,24 @@ async def t20_al_fallar_dice_que_si_entendio(g):
         s = await F.responder({**conv_b, **c}, _cfg("t20b"))
         chequear(f"«{basura}» no inventa una pista", "Entendí" not in s["respuesta"])
 
-    # ---- Y la salida a una persona, a partir del segundo fallo ----
+    # ---- Y la salida a una persona, siempre a la vista ----
     #
     # 87% de los clientes dice que es esencial poder llegar a un humano
-    # (Gartner, ago 2026), y el momento en que más se busca es justo después de
-    # un fallo. Al primero no va: alarga el mensaje sin motivo.
+    # (Gartner, ago 2026), y la literatura de diseño es explícita en que
+    # esconderla al pie en letra chica no cuenta. Cada paso la nombra.
+    #
+    # UNA sola vez, y por eso está el segundo chequeo: cuando el pedido del paso
+    # ya la trae, agregarla otra vez en `no_entendi` la repetía en el mismo
+    # mensaje — que es la forma más rápida de que deje de leerse.
     conv_1 = {"mensaje": "asdasd", "estado": Estado.ESPERANDO_SERVICIO.value,
               "intent": Intencion.DESCONOCIDO.value, "entidades": {},
               "opciones": [], "sin_entender": 0}
     s1 = await F.responder({**conv_1, **await F.avanzar(conv_1, _cfg("t20c"))}, _cfg("t20c"))
-    chequear("al primer fallo NO alarga con la salida",
-             "una persona" not in s1["respuesta"])
-
-    conv_2 = {**conv_1, "sin_entender": 1}
-    s2 = await F.responder({**conv_2, **await F.avanzar(conv_2, _cfg("t20c"))}, _cfg("t20c"))
-    chequear("al segundo fallo sí nombra «una persona»",
-             "una persona" in s2["respuesta"], s2["respuesta"][-60:])
+    chequear("al fallar, la salida está a la vista",
+             "una persona" in s1["respuesta"], s1["respuesta"][-60:])
+    chequear("y aparece UNA sola vez",
+             s1["respuesta"].count("una persona") == 1,
+             f"{s1['respuesta'].count('una persona')} veces")
 
 
 async def t21_la_metrica_no_puede_tumbar_el_turno(g):
@@ -1214,6 +1216,27 @@ async def t25_no_se_tira_lo_que_ya_dijo(g, doble):
     chequear("con TODO junto, igual para en la confirmación",
              c.get("estado") == Estado.ESPERANDO_CONFIRMACION.value, f"paso={c.get('estado')}")
     chequear("y NO reservó nada todavía", not c.get("codigo"), str(c.get("codigo")))
+
+    # ---- Y el PRIMER mensaje también cuenta ----
+    #
+    # La apertura sale siempre en una sesión nueva —dice quién es el bot, qué
+    # hace el negocio y dónde está la salida— y eso no se toca. Lo que sí se
+    # arregló: además de saludar, aplica lo que la persona dijo en ese mismo
+    # mensaje. Antes lo tiraba, así que quien abría con «un corte el viernes»
+    # recibía el menú entero como si no hubiera escrito nada.
+    c = await con({"servicio": servicios[0].nombre, "fecha": manana},
+                  estado=Estado.APERTURA, mensaje="hola, quiero un corte mañana")
+    chequear("el primer mensaje sigue mostrando la apertura",
+             c.get("_plantilla") == "apertura", str(c.get("_plantilla")))
+    chequear("pero también toma el servicio que dijo",
+             c.get("servicio_id") == servicios[0].id, str(c.get("servicio_id")))
+    chequear("y no vuelve a pedir el servicio",
+             c.get("estado") != Estado.ESPERANDO_SERVICIO.value, f"paso={c.get('estado')}")
+
+    # Un saludo pelado no arrastra nada: la apertura de siempre.
+    c = await con({}, estado=Estado.APERTURA, mensaje="hola")
+    chequear("un «hola» pelado deja la apertura como estaba",
+             c.get("estado") == Estado.ESPERANDO_SERVICIO.value, f"paso={c.get('estado')}")
 
     # ---- Un número suelto no se aplica a todos los pasos ----
     #

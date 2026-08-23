@@ -738,7 +738,21 @@ async def avanzar(conv: Conversacion, config) -> dict:
     # Es el requisito de que la puerta de entrada sea siempre la misma; el
     # dato que trajo no se pierde, se interpreta en el mensaje siguiente.
     if estado == Estado.APERTURA:
-        return await _abrir(saltear, negocio)
+        # La apertura sale igual —dice quién es el bot, qué hace el negocio y
+        # dónde está la salida, y eso vale la pena en el primer mensaje— pero
+        # además se aplica lo que la persona dijo en ESE mismo mensaje.
+        #
+        # Antes se tiraba: quien abría con «hola, quiero un corte el viernes»
+        # recibía el menú entero, como si no hubiera escrito nada. Y es el
+        # primer mensaje, que es donde la gente escribe la frase más completa.
+        #
+        # `responder` ya sabe pegar la apertura con el paso al que se llegó
+        # —lo hacía para los negocios de un solo servicio— así que acá no hay
+        # nada que redactar.
+        abierto = await _abrir(saltear, negocio)
+        avanzado = await _seguir_con_lo_dicho(
+            {**conv, **abierto}, ent, negocio, cfg, saltear)
+        return {**abierto, **avanzado, "_plantilla": "apertura"}
 
     # Un nombre escrito en la confirmación corrige a nombre de QUIÉN va el
     # turno, y no quién sos vos.
@@ -1437,12 +1451,7 @@ async def responder(conv: Conversacion, config) -> dict:
                                  await _aturno.listar_servicios(negocio))
         return {"respuesta": P.no_entendi(
                     paso["respuesta"],
-                    pista=P.pista_de(conv.get("entidades"), conv.get("mensaje", "")),
-                    # La salida a una persona desde el SEGUNDO tropiezo. Que
-                    # exista es lo que el 87% de los clientes considera
-                    # esencial; ponerla ya en el primero alarga cada fallo con
-                    # una oferta que todavía no hace falta.
-                    ofrecer_persona=int(conv.get("sin_entender") or 0) >= 2),
+                    pista=P.pista_de(conv.get("entidades"), conv.get("mensaje", ""))),
                 "opciones": paso.get("opciones", [])}
 
     if especial == "sesion_reiniciada":

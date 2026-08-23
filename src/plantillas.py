@@ -160,6 +160,7 @@ def lista_servicios(servicios: list[Servicio], preseleccion: str | None = None) 
         lineas += ["", "Confirmá con el número o elegí otro."]
     else:
         lineas += ["", "Respondé con el número."]
+    lineas += ["", "Si preferís, escribime «una persona» y te contesta alguien del local."]
     return "\n".join(lineas)
 
 
@@ -180,7 +181,8 @@ def lista_staff(personas: list[Profesional], servicio: str | None) -> str:
     for i, p in enumerate(personas, 1):
         lineas.append(f"{i}. {p.nombre}")
     lineas += [f"{len(personas) + 1}. Me da igual", "",
-               "Respondé con el número o el nombre."]
+               "Respondé con el número o el nombre.",
+               "", "Si preferís, escribime «una persona» y te contesta alguien del local."]
     return "\n".join(lineas)
 
 
@@ -276,6 +278,7 @@ def selector_dias(dias: list[DiaConCupo], hoy: date | None = None) -> str:
     # solo "respondé con el número" delante de una lista con huecos parece un
     # error del bot; nombrar el día siempre funciona y es lo que la gente hace.
     lineas += ["", "Respondé con el número o el día (por ejemplo, «el jueves»)."]
+    lineas += ["", "Si preferís, escribime «una persona» y te contesta alguien del local."]
     return "\n".join(lineas)
 
 
@@ -319,6 +322,7 @@ def lista_horarios(dia: date, horarios: list, maximo: int = 8) -> str:
     if len(horarios) > maximo:
         lineas += ["", f"Hay {len(horarios) - maximo} horarios más tarde. Pedime 'más'."]
     lineas += ["", "Respondé con el número."]
+    lineas += ["", "Si preferís, escribime «una persona» y te contesta alguien del local."]
     return "\n".join(lineas)
 
 
@@ -381,6 +385,7 @@ def resumen(servicio: str, staff: str | None, dia: date, hora,
         lineas.append("Si el turno es para otra persona, escribime su nombre.")
     else:
         lineas.append("¿Confirmo? Respondé SÍ o NO.")
+    lineas += ["", "Si preferís hablar con alguien del local, pedímelo."]
     return "\n".join(lineas)
 
 
@@ -1028,8 +1033,7 @@ def _hora_si_parsea(valor) -> str | None:
     return None
 
 
-def no_entendi(reintento: str, pista: str | None = None,
-               ofrecer_persona: bool = False) -> str:
+def no_entendi(reintento: str, pista: str | None = None) -> str:
     """No se entendió. Se dice qué SÍ llegó, se ofrecen las opciones, y a la
     segunda se nombra la salida.
 
@@ -1039,18 +1043,13 @@ def no_entendi(reintento: str, pista: str | None = None,
         de reparación que la gente prefiere. Sin pista queda "No te entendí",
         que es la vieja y la peor, pero es la única honesta cuando de verdad no
         llegó nada.
-      · La SALIDA a una persona recién al segundo fallo. Que exista es
-        obligatorio —87% de los clientes la considera esencial (Gartner, ago
-        2026)— y el momento en que más se busca es después de un fallo. Pero
-        ponerla ya en el primero alarga cada tropiezo con una oferta que
-        todavía no hace falta.
+      · La SALIDA a una persona ya viene DENTRO de `reintento`: desde que cada
+        paso la nombra al pie, no hace falta agregarla acá. Antes esto tenía su
+        propia escalera —ofrecerla recién al segundo tropiezo— y al ponerla en
+        todos los pasos quedó apareciendo dos veces en el mismo mensaje.
     """
     apertura_ = f"Entendí que querés algo {pista}." if pista else "No te entendí."
-    lineas = [apertura_, "", reintento]
-    if ofrecer_persona:
-        lineas += ["", "Si preferís, escribime «una persona» y te contesta "
-                       "alguien del local."]
-    return "\n".join(lineas)
+    return "\n".join([apertura_, "", reintento])
 
 
 def respuesta_info(texto: str) -> str:
