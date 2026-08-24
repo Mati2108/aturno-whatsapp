@@ -912,11 +912,19 @@ def _bloque(titulo: str, ayuda: str, accion: str, filas: list[dict], vacio: str,
     top = max(f["veces"] for f in relevantes)
 
     def renglon(f):
-        return (f'<li><span class="veces {tono}">{f["veces"]}</span>'
+        # Dos renglones y no cuatro columnas. Una fila de cuatro columnas con
+        # texto libre adentro se ensancha sola hasta pasarse de la pantalla, y
+        # cuando eso pasa se lleva puesto TODO el layout de la página — las
+        # tarjetas de arriba quedan cortadas contra el borde. Pasó así.
+        ctx = " · ".join(x for x in (
+            _PASO_LEGIBLE.get(f.get("paso") or "", "") or (f.get("detalle") or ""),
+            _cuando(f.get("ultima"))) if x)
+        return (f'<li><div class="fila1">'
+                f'<span class="veces {tono}">{f["veces"]}</span>'
+                f'<span class="que">{_esc(f["texto"] or "—")}</span></div>'
+                f'<div class="fila2 {tono}">'
                 f'<span class="barra"><i style="width:{f["veces"] / top * 100:.0f}%"></i></span>'
-                f'<span class="que">{_esc(f["texto"] or "—")}</span>'
-                f'<span class="meta">{_esc(_PASO_LEGIBLE.get(f.get("paso") or "", f.get("detalle") or ""))}'
-                f'<em>{_cuando(f.get("ultima"))}</em></span></li>')
+                f'<span class="ctx">{_esc(ctx)}</span></div></li>')
 
     visibles = "".join(renglon(f) for f in relevantes[:colapsar_desde])
     ocultas = relevantes[colapsar_desde:]
@@ -935,91 +943,126 @@ _ESTILO = """
   --naranja:#ff5722; --naranja-claro:#ff7043;
   --violeta:#6a1b9a;
   --texto:#171717; --tenue:#737373; --borde:#e5e5e5; --papel:#fff; --fondo:#fafafa;
-  --radio:1rem; --sombra:0 2px 4px rgba(0,0,0,.06);
+  --radio:1rem; --sombra:0 1px 2px rgba(0,0,0,.04),0 2px 8px rgba(0,0,0,.04);
 }
-*{margin:0;padding:0;box-sizing:border-box}
+*{margin:0;padding:0;box-sizing:border-box;min-width:0}
+/* `min-width:0` en el reset, y no es cosmético: por defecto un item de grid o
+   de flex NO se achica por debajo de su contenido, así que UNA celda con texto
+   largo ensancha su fila, la fila ensancha la página, y de golpe las tarjetas
+   de arriba quedan cortadas contra el borde derecho. Pasó exactamente así. */
+html,body{max-width:100%;overflow-x:hidden}
 body{background:var(--fondo);color:var(--texto);font-family:Inter,system-ui,sans-serif;
   font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
 a{color:inherit}
-.marco{max-width:760px;margin:0 auto;padding:28px 18px 64px}
-h1{font-family:Poppins,sans-serif;font-size:26px;font-weight:700;letter-spacing:-.02em}
+.marco{max-width:720px;margin:0 auto;padding:26px 16px 64px}
+
+h1{font-family:Poppins,sans-serif;font-size:24px;font-weight:700;letter-spacing:-.02em;
+  overflow-wrap:anywhere}
 h1 span{color:var(--naranja)}
 .sub{color:var(--tenue);font-size:13px;margin-top:2px}
-.volver{display:inline-flex;align-items:center;gap:6px;color:var(--tenue);
-  text-decoration:none;font-size:13px;font-weight:500;margin-bottom:14px}
+.volver{display:inline-block;color:var(--tenue);text-decoration:none;font-size:13px;
+  font-weight:500;margin-bottom:12px}
 .volver:hover{color:var(--naranja)}
 
-.negocios{display:grid;gap:11px;margin-top:24px;list-style:none}
+/* ── El titular: un solo número, el que importa ── */
+.titular{background:var(--papel);border:1px solid var(--borde);border-radius:var(--radio);
+  padding:20px;margin-top:20px;box-shadow:var(--sombra)}
+.titular b{font-family:Poppins,sans-serif;font-size:40px;font-weight:700;line-height:1;
+  letter-spacing:-.03em;color:var(--naranja);font-variant-numeric:tabular-nums}
+.titular p{color:var(--tenue);font-size:13px;margin-top:6px}
+.titular .detalle{color:var(--texto);font-size:13.5px;margin-top:12px;
+  padding-top:12px;border-top:1px solid var(--borde)}
+
+/* ── Las cifras de apoyo ── */
+/* El `min(...)` no es adorno: `minmax(96px,1fr)` NO se achica por debajo de
+   96px, así que en una pantalla angosta cuatro columnas exigen 411px, la
+   grilla desborda su caja y arrastra a toda la página — el contenido queda
+   cortado contra el borde derecho. Con `min(96px,100%)` la columna cede
+   primero y la grilla se reacomoda sola. */
+.tarjetas{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(96px,100%),1fr));
+  gap:9px;margin-top:9px}
+.t{background:var(--papel);border:1px solid var(--borde);border-radius:.75rem;
+  padding:12px 13px;box-shadow:var(--sombra)}
+.t b{display:block;font-family:Poppins,sans-serif;font-size:20px;font-weight:600;
+  line-height:1.2;letter-spacing:-.02em;font-variant-numeric:tabular-nums;
+  overflow-wrap:anywhere}
+.t span{color:var(--tenue);font-size:11px;display:block;margin-top:2px;line-height:1.35}
+
+/* ── Índice de negocios ── */
+.negocios{display:grid;grid-template-columns:1fr;gap:10px;margin-top:22px;list-style:none}
 .negocio{display:block;background:var(--papel);border:1px solid var(--borde);
   border-radius:var(--radio);padding:16px 18px;text-decoration:none;
-  box-shadow:var(--sombra);transition:all .16s cubic-bezier(.32,.72,0,1)}
-.negocio:hover{border-color:var(--naranja-claro);transform:translateY(-1px);
-  box-shadow:0 6px 16px rgba(0,0,0,.07)}
+  box-shadow:var(--sombra);transition:border-color .16s,transform .16s}
+.negocio:hover{border-color:var(--naranja-claro);transform:translateY(-1px)}
 .negocio .nombre{font-family:Poppins,sans-serif;font-weight:600;font-size:16px;
   display:flex;align-items:center;justify-content:space-between;gap:12px}
 .negocio .flecha{color:var(--tenue);font-weight:400}
-.negocio .cifras{display:flex;flex-wrap:wrap;gap:18px;margin-top:10px}
-.negocio .cifras div{font-size:12px;color:var(--tenue)}
-.negocio .cifras b{display:block;font-family:Poppins,sans-serif;font-size:19px;
+.negocio .cifras{display:flex;flex-wrap:wrap;gap:16px 22px;margin-top:11px}
+.negocio .cifras div{font-size:11.5px;color:var(--tenue)}
+.negocio .cifras b{display:block;font-family:Poppins,sans-serif;font-size:18px;
   font-weight:600;color:var(--texto);font-variant-numeric:tabular-nums;line-height:1.2}
 .negocio .cifras .clave b{color:var(--naranja)}
-.negocio .cifras .ojo b{color:var(--violeta)}
 .sin-datos{color:var(--tenue);font-size:12.5px;margin-top:8px}
 
-.tarjetas{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:11px;margin-top:22px}
-.t{background:var(--papel);border:1px solid var(--borde);border-radius:var(--radio);
-  padding:15px 16px;box-shadow:var(--sombra)}
-.t b{display:block;font-family:Poppins,sans-serif;font-size:clamp(19px,5.2vw,27px);
-  font-weight:600;line-height:1.15;letter-spacing:-.03em;font-variant-numeric:tabular-nums;
-  /* Sin esto «US$ 0.000» se desborda de su tarjeta en pantallas angostas: el
-     número es más ancho que la columna que le tocó y no hay dónde cortarlo. */
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.t.destacada b{color:var(--naranja)}
-.t span{color:var(--tenue);font-size:11.5px;display:block;margin-top:3px}
-
-.rotulo{display:flex;align-items:center;gap:10px;margin:38px 0 4px;
+/* ── Secciones ── */
+.rotulo{display:flex;align-items:center;gap:10px;margin:36px 0 2px;
   font-family:Poppins,sans-serif;font-size:11px;font-weight:600;letter-spacing:.1em;
   text-transform:uppercase}
 .rotulo::after{content:"";flex:1;height:1px;background:var(--borde)}
 .rotulo.negocio-r{color:var(--violeta)}
 .rotulo.bot{color:var(--naranja)}
+.bloque{margin-top:22px}
+h2{font-family:Poppins,sans-serif;font-size:15px;font-weight:600;overflow-wrap:anywhere}
+.ayuda{color:var(--tenue);font-size:12.5px;margin:2px 0 10px}
+.accion{color:var(--texto);font-size:12.5px;margin-top:9px}
+.sueltas{color:var(--tenue);font-size:11.5px;margin-top:5px}
 
-.bloque{margin-top:20px}
-h2{font-family:Poppins,sans-serif;font-size:15.5px;font-weight:600}
-.ayuda{color:var(--tenue);font-size:12.5px;margin:1px 0 10px;max-width:62ch}
+/* ── Las listas ── */
 .tarjeta{background:var(--papel);border:1px solid var(--borde);
   border-radius:var(--radio);box-shadow:var(--sombra);overflow:hidden;list-style:none}
-.vacia{padding:16px;color:var(--tenue);font-size:13px}
-.senales li{display:grid;grid-template-columns:auto 46px 1fr auto;gap:11px;
-  align-items:center;padding:11px 15px;border-top:1px solid var(--borde)}
+.vacia{padding:15px;color:var(--tenue);font-size:13px}
+.senales{list-style:none}
+.senales li{padding:11px 15px;border-top:1px solid var(--borde)}
 .senales li:first-child{border-top:0}
-.veces{font-family:Poppins,sans-serif;font-weight:600;font-size:14px;min-width:1.6em;
-  text-align:right;font-variant-numeric:tabular-nums;color:var(--violeta)}
+/* Una fila = dos renglones, y ninguno puede ensanchar la página.
+   Arriba: el número y qué pasó. Abajo: la barra y el contexto. */
+.fila1{display:flex;align-items:baseline;gap:10px}
+.veces{font-family:Poppins,sans-serif;font-weight:700;font-size:15px;
+  font-variant-numeric:tabular-nums;color:var(--violeta);flex:0 0 auto}
 .veces.alerta{color:var(--naranja)}
-.barra{height:5px;background:var(--fondo);border-radius:999px;overflow:hidden}
-.barra i{display:block;height:100%;background:var(--violeta);opacity:.55;border-radius:999px}
-.veces.alerta ~ .barra i{background:var(--naranja)}
-.que{word-break:break-word;font-size:14px}
-.meta{color:var(--tenue);font-size:11px;text-align:right;white-space:nowrap}
-.meta em{display:block;font-style:normal;opacity:.7}
-.dijo{display:block;font-style:normal;color:var(--tenue);font-size:12.5px;margin-top:2px}
-.accion{color:var(--texto);font-size:12.5px;margin-top:9px;padding-left:2px;max-width:62ch}
-.sueltas{color:var(--tenue);font-size:11.5px;margin-top:6px;font-style:italic}
+.que{flex:1;font-size:14.5px;overflow-wrap:anywhere}
+.pct{flex:0 0 auto;color:var(--tenue);font-size:12px;font-variant-numeric:tabular-nums}
+.fila2{display:flex;align-items:center;gap:10px;margin:6px 0 0 calc(1.4em + 10px)}
+.barra{flex:1 1 40px;height:6px;background:#f0f0f0;border-radius:999px;overflow:hidden}
+.barra i{display:block;height:100%;background:var(--violeta);border-radius:999px}
+.alerta ~ .fila2 .barra i,.fila2.alerta .barra i{background:var(--naranja)}
+.ctx{flex:0 1 auto;color:var(--tenue);font-size:11px;overflow-wrap:anywhere;
+  max-width:55%;text-align:right}
+.dijo{display:block;color:var(--tenue);font-size:12.5px;margin-top:3px;
+  overflow-wrap:anywhere}
+
 details{border-top:1px solid var(--borde)}
 details summary{cursor:pointer;padding:10px 15px;color:var(--tenue);font-size:12.5px;
   font-weight:500;list-style:none}
 details summary::-webkit-details-marker{display:none}
-details summary::before{content:"▸ ";display:inline-block;transition:transform .16s}
-details[open] summary::before{transform:rotate(90deg)}
+details summary::before{content:"▸ ";display:inline-block}
+details[open] summary::before{content:"▾ "}
 details summary:hover{color:var(--naranja)}
-.avanzado{background:transparent;border:0;border-top:1px solid var(--borde);
-  margin-top:34px;padding-top:6px}
+
+/* En un celular angosto las cifras van de a dos, y punto.
+   `auto-fit` con `minmax` decide sola cuántas columnas entran, y por debajo de
+   ~440px decidía mal: dejaba las cuatro en fila, la grilla se pasaba de la caja
+   y arrastraba a toda la página — el texto quedaba cortado contra el borde.
+   Medido con capturas a 360, 390, 500 y 720: a 500 entra bien, abajo no.
+   Acá no hace falta que decida nada. */
+@media screen and (max-width:520px){
+  .tarjetas{grid-template-columns:1fr 1fr}
+  .titular b{font-size:34px}
+  .ctx{max-width:60%}
+}
+.avanzado{border:0;border-top:1px solid var(--borde);margin-top:34px;padding-top:4px}
 .avanzado > summary{padding-left:0;font-family:Poppins,sans-serif;font-size:11px;
   letter-spacing:.1em;text-transform:uppercase;font-weight:600}
-@media(max-width:520px){
-  .senales li{grid-template-columns:auto 1fr;row-gap:3px}
-  .barra{display:none} .meta{grid-column:2;text-align:left}
-}
 """
 
 _CABEZA = """<!doctype html><html lang="es"><head>
@@ -1029,6 +1072,27 @@ _CABEZA = """<!doctype html><html lang="es"><head>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@500;600;700&display=swap" rel="stylesheet">
 <style>{estilo}</style></head><body><div class="marco">"""
+
+
+def _resto(m: dict) -> str:
+    """La otra mitad del titular: qué pasó con las que NO terminaron en turno.
+
+    Un porcentaje solo no dice nada para hacer. «67% terminaron en turno» se lee
+    y se sigue de largo; «el 33% restante: 2 pasaron a una persona y 1 se fue a
+    mitad» manda a mirar abajo, que es donde está el motivo.
+    """
+    if not m["cerradas"]:
+        return "Todavía no terminó ninguna conversación."
+    partes = []
+    if m["escaladas"]:
+        n = m["escaladas"]
+        partes.append(f'{n} pasó a una persona' if n == 1 else f'{n} pasaron a una persona')
+    if m["abandonadas"]:
+        n = m["abandonadas"]
+        partes.append(f'{n} se fue a mitad' if n == 1 else f'{n} se fueron a mitad')
+    if not partes:
+        return "Ninguna se perdió por el camino."
+    return "De las otras, " + " y ".join(partes) + ". Abajo está por qué."
 
 
 def _pct(x) -> str:
@@ -1137,11 +1201,20 @@ async def tablero(negocio: str | None = None) -> str:
     if cuellos:
         top_c = max(c["tropiezos"] for c in cuellos)
         cuellos_html = '<ol class="senales tarjeta">' + "".join(
-            f'<li><span class="veces alerta">{c["tropiezos"]}</span>'
+            f'<li><div class="fila1">'
+            # El PORCENTAJE es lo que se lee, no el conteo. «24 tropiezos» puede
+            # ser un desastre o ser normal según si fueron 24 de 30 o de 900; el
+            # 13% se entiende solo. El conteo queda al costado, más chico, para
+            # quien quiera la escala.
+            + (f'<span class="veces alerta">{c["falla"]:.0%}</span>'
+               if c["falla"] is not None
+               else f'<span class="veces alerta">{c["tropiezos"]}</span>')
+            + f'<span class="que">{_esc(_PASO_LEGIBLE.get(c["paso"], c["paso"]))}</span>'
+            + (f'<span class="pct">{c["tropiezos"]} de {c["mensajes"]}</span>'
+               if c["mensajes"] else '')
+            + f'</div><div class="fila2 alerta">'
             f'<span class="barra"><i style="width:{c["tropiezos"] / top_c * 100:.0f}%"></i></span>'
-            f'<span class="que">{_esc(_PASO_LEGIBLE.get(c["paso"], c["paso"]))}'
-            f'<em class="dijo">{c["frases"]} frase(s) distinta(s)</em></span>'
-            f'<span class="meta"><em>{_cuando(c.get("ultima"))}</em></span></li>'
+            f'<span class="ctx">{c["frases"]} frase(s) distinta(s)</span></div></li>'
             for c in cuellos) + '</ol>'
     else:
         cuellos_html = '<div class="tarjeta vacia">Ningún paso está costando trabajo.</div>'
@@ -1151,110 +1224,41 @@ async def tablero(negocio: str | None = None) -> str:
     if caidas:
         top = max(caidas.values())
         filas_caidas = "".join(
-            f'<li><span class="veces alerta">{n}</span>'
-            f'<span class="barra"><i style="width:{n / top * 100:.0f}%"></i></span>'
+            f'<li><div class="fila1"><span class="veces alerta">{n}</span>'
             f'<span class="que">{_esc(_PASO_LEGIBLE.get(p, p))}'
             # Lo último que escribieron antes de irse. El paso dice DÓNDE; esto
             # dice por qué, y el por qué es lo único que se puede arreglar.
             + ("".join(f'<em class="dijo">«{_esc(x)}»</em>' for x in frases.get(p, []))
                if frases.get(p) else "")
-            + f'</span></li>'
+            + f'</span></div></li>'
             for p, n in caidas.items())
         caidas_html = f'<ol class="senales tarjeta">{filas_caidas}</ol>'
     else:
         caidas_html = '<div class="tarjeta vacia">Todavía nadie dejó una conversación a mitad.</div>'
 
-    return f"""<!doctype html><html lang="es"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tablero · {_esc(negocio or "aturno")}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@500;600;700&display=swap" rel="stylesheet">
-<style>
-:root{{
-  --naranja:#ff5722; --naranja-claro:#ff7043; --naranja-suave:#fff1ed;
-  --violeta:#6a1b9a; --violeta-suave:#f5edfa;
-  --texto:#171717; --tenue:#737373; --borde:#e5e5e5; --papel:#fff; --fondo:#fafafa;
-  --radio:1rem; --sombra:0 2px 4px rgba(0,0,0,.06);
-}}
-*{{margin:0;padding:0;box-sizing:border-box}}
-body{{background:var(--fondo);color:var(--texto);font-family:Inter,system-ui,sans-serif;
-  font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}}
-.marco{{max-width:760px;margin:0 auto;padding:28px 18px 64px}}
-h1{{font-family:Poppins,sans-serif;font-size:26px;font-weight:700;letter-spacing:-.02em}}
-h1 span{{color:var(--naranja)}}
-.sub{{color:var(--tenue);font-size:13px;margin-top:2px}}
-
-.pestanas{{display:flex;gap:8px;overflow-x:auto;margin:22px 0 26px;padding-bottom:4px;
-  scrollbar-width:none}}
-.pestanas::-webkit-scrollbar{{display:none}}
-.pest{{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:9px 15px;
-  background:var(--papel);border:1px solid var(--borde);border-radius:999px;
-  color:var(--tenue);text-decoration:none;font-size:13px;font-weight:500;
-  transition:all .16s cubic-bezier(.32,.72,0,1)}}
-.pest:hover{{border-color:var(--naranja-claro);color:var(--texto)}}
-.pest b{{background:var(--fondo);color:var(--tenue);font-size:11px;font-weight:600;
-  padding:1px 7px;border-radius:999px}}
-.pest.activa{{background:var(--naranja);border-color:var(--naranja);color:#fff;
-  box-shadow:0 2px 8px rgba(255,87,34,.28)}}
-.pest.activa b{{background:rgba(255,255,255,.22);color:#fff}}
-
-.tarjetas{{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:11px}}
-.t{{background:var(--papel);border:1px solid var(--borde);border-radius:var(--radio);
-  padding:15px 16px;box-shadow:var(--sombra)}}
-.t b{{display:block;font-family:Poppins,sans-serif;font-size:27px;font-weight:600;
-  line-height:1.15;letter-spacing:-.02em;font-variant-numeric:tabular-nums}}
-.t.destacada b{{color:var(--naranja)}}
-.t span{{color:var(--tenue);font-size:11.5px;display:block;margin-top:3px}}
-
-.rotulo{{display:flex;align-items:center;gap:10px;margin:38px 0 4px;
-  font-family:Poppins,sans-serif;font-size:11px;font-weight:600;letter-spacing:.1em;
-  text-transform:uppercase}}
-.rotulo::after{{content:"";flex:1;height:1px;background:var(--borde)}}
-.rotulo.negocio{{color:var(--violeta)}}
-.rotulo.bot{{color:var(--naranja)}}
-
-.bloque{{margin-top:20px}}
-h2{{font-family:Poppins,sans-serif;font-size:15.5px;font-weight:600}}
-.ayuda{{color:var(--tenue);font-size:12.5px;margin:1px 0 10px;max-width:62ch}}
-.tarjeta{{background:var(--papel);border:1px solid var(--borde);
-  border-radius:var(--radio);box-shadow:var(--sombra);overflow:hidden;list-style:none}}
-.vacia{{padding:16px;color:var(--tenue);font-size:13px}}
-.senales li{{display:grid;grid-template-columns:auto 46px 1fr auto;gap:11px;
-  align-items:center;padding:11px 15px;border-top:1px solid var(--borde)}}
-.senales li:first-child{{border-top:0}}
-.veces{{font-family:Poppins,sans-serif;font-weight:600;font-size:14px;min-width:1.6em;
-  text-align:right;font-variant-numeric:tabular-nums;color:var(--violeta)}}
-.veces.alerta{{color:var(--naranja)}}
-.barra{{height:5px;background:var(--fondo);border-radius:999px;overflow:hidden}}
-.barra i{{display:block;height:100%;background:var(--violeta);opacity:.55;border-radius:999px}}
-.veces.alerta ~ .barra i{{background:var(--naranja)}}
-.que{{word-break:break-word;font-size:14px}}
-.meta{{color:var(--tenue);font-size:11px;text-align:right;white-space:nowrap}}
-.meta em{{display:block;font-style:normal;opacity:.7}}
-.dijo{{display:block;font-style:normal;color:var(--tenue);font-size:12.5px;margin-top:2px}}
-@media(max-width:520px){{
-  .senales li{{grid-template-columns:auto 1fr;row-gap:3px}}
-  .barra{{display:none}} .meta{{grid-column:2;text-align:left}}
-}}
-</style></head><body><div class="marco">
+    return (_CABEZA.format(titulo=f"Tablero · {_esc(negocio)}", estilo=_ESTILO) + f"""
 
 <a class="volver" href="/tablero">← todos los negocios</a>
 <h1>{_esc(negocio)}</h1>
 <p class="sub">{m["cerradas"]} conversaciones terminadas · {m["en_curso"]} en curso</p>
 
+<div class="titular">
+  <b>{pct(m["containment"])}</b>
+  <p>de las conversaciones terminaron en un turno, sin que nadie del local
+  tuviera que meterse.</p>
+  <p class="detalle">{_resto(m)}</p>
+</div>
 <div class="tarjetas">
-  <div class="t destacada"><b>{pct(m["containment"])}</b><span>resueltas sin humano</span></div>
-  <div class="t"><b>{pct(m["escalacion"])}</b><span>pasaron a una persona</span></div>
   <div class="t"><b>{m["reservadas"]}</b><span>turnos sacados</span></div>
+  <div class="t"><b>{pct(m["escalacion"])}</b><span>pasaron a una persona</span></div>
+  <div class="t"><b>{pct(m["abandono"])}</b><span>se fueron a mitad</span></div>
   <div class="t"><b>{m["turnos_hasta_reservar"] or "—"}</b><span>mensajes por turno</span></div>
-  <div class="t"><b>US$&nbsp;{g.get("usd", 0):.3f}</b><span>modelo, hoy</span></div>
 </div>
 
 <p class="rotulo negocio-r">Para el negocio</p>
 {_bloque("Turnos que no pudiste dar",
-         "Quisieron reservar y no tenías lugar. Agrupado por día de la semana y "
-         "franja, no por fecha: un negocio no abre el sábado 29, abre los sábados.",
+         "Quisieron reservar y no tenías lugar. Por día de la semana y hora, no por "
+         "fecha: un negocio no abre el sábado 29, abre los sábados a las 10.",
          "→ Si un día se repite, ahí conviene abrir agenda o sumar a alguien.",
          sen["demanda_perdida"],
          "Todo lo que te pidieron estaba disponible.")}
@@ -1305,7 +1309,7 @@ antes de irse. El paso dice dónde; la frase dice por qué.</p>
          "No hubo que frenar ninguna respuesta.")}
 </details>
 
-</div></body></html>"""
+</div></body></html>""")
 
 
 @app.get("/salud", response_model=Salud)
@@ -1934,6 +1938,10 @@ async def _componer_respuesta(mensaje: MensajeEntrante, negocio: Tenant) -> str:
     await metricas.registrar(
         hilo, negocio.business_id, estado,
         desenlace=_DESENLACE.get(estado), mensaje=mensaje.texto)
+    # El denominador: cuántos mensajes pasó cada paso. Sin esto, «24 tropiezos
+    # eligiendo el servicio» no se puede leer — no se sabe si son 24 de 30 o de
+    # 900. Se cuenta el paso en el que QUEDÓ, que es el que se le está pidiendo.
+    await metricas.contar_paso(negocio.business_id, estado)
 
     return salida["respuesta"]
 

@@ -960,20 +960,18 @@ def _lo_dijo_para(paso: Estado, ent: dict, conv: Conversacion) -> bool:
     return False
 
 
-# Las franjas, para agrupar. Un pedido a las 10:30 y otro a las 11 son el mismo
-# problema —falta agenda a la mañana— y contarlos por separado los esconde a los
-# dos abajo de la lista.
-_FRANJAS = ((12, "a la mañana"), (18, "a la tarde"), (24, "a la noche"))
-
-
 def _lo_que_pidio(conv: Conversacion) -> str | None:
-    """Qué quiso reservar, agrupado por DÍA DE LA SEMANA y franja.
+    """Qué quiso reservar: DÍA DE LA SEMANA y HORA exacta.
 
-    No por fecha exacta, y esa es toda la diferencia entre un dato y un ruido.
-    «Sábado 29 ×1» no le dice nada a nadie: pasó una vez y ya pasó. «Sábado a la
-    mañana ×9» es una instrucción — ahí falta agenda, todas las semanas.
+    Dos decisiones, y las dos importan.
 
-    Un negocio no abre el sábado 29; abre los sábados.
+    EL DÍA DE LA SEMANA, no la fecha. «Sábado 29 ×1» no le dice nada a nadie:
+    pasó una vez y ya pasó. Un negocio no abre el sábado 29; abre los sábados.
+
+    LA HORA EXACTA, no la franja. Empecé agrupando en «a la mañana» y estaba
+    mal: eso obliga a adivinar cuál de las cuatro horas de la mañana abrir. La
+    hora es el turno, y el turno es lo que vale plata — «Sábado a las 10 ×6» se
+    resuelve abriendo ESE horario, y se puede contar cuánto valen esos seis.
     """
     iso = conv.get("fecha")
     if not iso:
@@ -983,15 +981,8 @@ def _lo_que_pidio(conv: Conversacion) -> str | None:
     except (TypeError, ValueError, IndexError):
         return None
 
-    hora = conv.get("hora") or ""
-    try:
-        h = int(str(hora).split(":")[0])
-        franja = next(f for tope, f in _FRANJAS if h < tope)
-        return f"{dia} {franja}"
-    except (ValueError, IndexError, StopIteration):
-        # Sin hora, el día solo. Sigue siendo accionable: «los sábados» ya dice
-        # dónde mirar, aunque no diga a qué hora.
-        return f"{dia}"
+    hora = str(conv.get("hora") or "").strip()
+    return f"{dia} a las {hora}" if ":" in hora else dia
 
 
 async def _abrir(saltear: set[Estado], negocio: str) -> dict:

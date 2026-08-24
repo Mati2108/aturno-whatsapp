@@ -141,6 +141,20 @@ create table if not exists senales (
     cuando      timestamptz not null
 );
 create index if not exists senales_negocio on senales (business_id, tipo);
+
+-- Cuántos mensajes pasó cada paso. Es el DENOMINADOR, y sin él los tropiezos no
+-- significan nada: «24 veces no entendió eligiendo el servicio» puede ser un
+-- desastre o puede ser normal, según si fueron 24 de 30 o 24 de 900.
+--
+-- Una fila por (negocio, paso) y no una por mensaje: lo único que se pregunta
+-- es «cuántos», así que guardar cada mensaje sería pagar millones de filas por
+-- un número que cabe en una.
+create table if not exists pasos (
+    business_id text not null,
+    paso        text not null,
+    mensajes    bigint not null default 0,
+    primary key (business_id, paso)
+);
 """
 
 # Los cuatro tipos, escritos para que agregar uno sea agregarlo acá.
@@ -196,6 +210,26 @@ async def registrar(hilo: str, business_id: str, estado: str,
                   t if desenlace else None, ultimo))
     except Exception as e:  # noqa: BLE001
         logger.warning("no se pudo registrar la métrica (%s): %s", type(e).__name__, e)
+
+
+async def contar_paso(business_id: str, paso: str) -> None:
+    """Suma un mensaje al paso donde ocurrió. Nunca levanta.
+
+    Se llama con CADA mensaje, no sólo con los que fallan. Es la mitad que
+    faltaba: los tropiezos sin el total son un número sin escala.
+    """
+    if not paso:
+        return
+    try:
+        pool = await _conexiones()
+        async with pool.connection() as c:
+            await c.execute("""
+                insert into pasos (business_id, paso, mensajes) values (%s, %s, 1)
+                on conflict (business_id, paso)
+                do update set mensajes = pasos.mensajes + 1
+            """, (business_id, paso))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("no se pudo contar el paso (%s): %s", type(e).__name__, e)
 
 
 async def anotar(tipo: str, business_id: str, paso: str | None = None,
@@ -353,18 +387,29 @@ async def cuellos_de_botella(business_id: str | None = None) -> list[dict]:
         pool = await _conexiones()
         async with pool.connection() as c:
             filas = await (await c.execute("""
-                select paso,
-                       count(*)                as tropiezos,
-                       count(distinct texto)   as frases,
-                       max(cuando)             as ultima
-                from senales
-                where tipo = 'no_entendio' and paso is not null
-                  and (%s::text is null or business_id = %s::text)
-                group by paso
+                select s.paso,
+                       count(*)                     as tropiezos,
+                       count(distinct s.texto)      as frases,
+                       max(s.cuando)                as ultima,
+                       coalesce(max(p.mensajes), 0) as mensajes
+                from senales s
+                left join (
+                    select business_id, paso, sum(mensajes) as mensajes
+                    from pasos
+                    where (%s::text is null or business_id = %s::text)
+                    group by business_id, paso
+                ) p on p.paso = s.paso and p.business_id = s.business_id
+                where s.tipo = 'no_entendio' and s.paso is not null
+                  and (%s::text is null or s.business_id = %s::text)
+                group by s.paso
                 order by count(*) desc
-            """, (business_id, business_id))).fetchall()
+            """, (business_id, business_id, business_id, business_id))).fetchall()
         return [{"paso": f["paso"], "tropiezos": f["tropiezos"],
-                 "frases": f["frases"],
+                 "frases": f["frases"], "mensajes": f["mensajes"],
+                 # El porcentaje es lo único accionable de la fila: 24 tropiezos
+                 # sobre 900 mensajes es ruido; sobre 30 es el paso roto.
+                 "falla": (round(f["tropiezos"] / f["mensajes"], 4)
+                           if f["mensajes"] else None),
                  "ultima": f["ultima"].isoformat() if f["ultima"] else None}
                 for f in filas]
     except Exception as e:  # noqa: BLE001
