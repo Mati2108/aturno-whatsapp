@@ -3,7 +3,7 @@
 Un solo lugar para ver **qué está hecho, qué falta, si se puede, y qué puede
 salir mal.** Los otros documentos son el detalle; éste es el mapa.
 
-Última actualización: **21 de agosto de 2026.**
+Última actualización: **24 de agosto de 2026.**
 
 ---
 
@@ -66,6 +66,10 @@ tengo el número de la primera. Ver la tarea 6.1.
 | ✅ | Tres listas vacías pedían elegir «un número» que no existía | Verificando las métricas |
 | ✅ | «quiero otro turno» se clasificaba como «otro horario» | La matriz de confusión |
 | ✅ | Con la búsqueda caída, el bot decía «no lo tengo cargado» (mentira) y le llenaba el panel al negocio con preguntas ya respondidas | Se agotó la cuota probando |
+| ✅ | Preguntar algo en el paso del nombre quedaba **como tu nombre**: «Para: Hacen Depilación Láser?» | Corriendo el guion de la demo |
+| ✅ | El primer mensaje con lo que querías devolvía **el menú encima**: dos listas numeradas en la misma pantalla | Lo viste vos grabando |
+| ✅ | Un adjunto sin tipo reventaba la plantilla y dejaba a la persona sin respuesta | Verificando los desvíos |
+| ✅ | El «escribiendo…» no se veía en el 88% de los mensajes: la respuesta llegaba antes de que se dibujara | Lo viste vos grabando |
 
 ## Lo que la investigación pedía — cerrado
 
@@ -119,7 +123,7 @@ tengo el número de la primera. Ver la tarea 6.1.
 
 # 🔜 Lo que falta
 
-## Tarea 1 · Reindexar los negocios de demo — **empezada, bloqueada**
+## ~~Tarea 1 · Reindexar los negocios de demo~~ — ✅ HECHA (22/8)
 
 Los archivos de demo estaban en el formato viejo: cada sección era un solo
 pedazo que hablaba de cinco cosas, y por eso «aceptan tarjeta?» no encontraba
@@ -127,8 +131,12 @@ nada teniendo la respuesta escrita. Reescritos al formato del panel: la
 peluquería pasó de 6 a **24** pedazos, el consultorio de 5 a **18**.
 
 - [x] Reescribir `datos/demo-peluqueria.md` y `datos/demo-consultorio.md`
-- [ ] **Reconstruir el índice** — necesita cuota de Google, agotada el 21/8
-- [ ] Medir cuántas preguntas encuentra ahora contra las que encontraba antes
+- [x] **Reconstruir el índice** — 24 fragmentos la peluquería, 16 el consultorio
+- [x] Medir: **encuentra 17 de 17 preguntas.** Antes «aceptan tarjeta?» daba cero
+
+> El reindexado de la noche anterior había **borrado lo viejo sin poder escribir
+> lo nuevo** (cuota agotada), así que la peluquería quedó unas horas con CERO
+> conocimiento. Apareció verificando antes de grabar, no en producción.
 
 **No afecta a un negocio real**: el panel escribe el formato correcto solo, y
 `aturno.md` ya está bien.
@@ -197,12 +205,16 @@ modelo haga más: **el clasificador ya extrae todo eso y el flujo lo tira.**
 
 - [ ] **6.1 · Medir cuánto acierta extrayendo DATOS**, no intenciones. Hoy sólo
       está medida la intención (92,9%). Es agregarle una columna a `casos.jsonl`
-- [ ] 6.2 · Aplicar las entidades a todos los pasos que resuelvan sin
-      ambigüedad, y frenar en el primero que no
-- [ ] 6.3 · Que una franja («a la tarde») filtre la lista de horarios en vez de
-      elegir por la persona
+- [x] 6.2 · Aplicar las entidades a todos los pasos que resuelvan sin
+      ambigüedad, y frenar en el primero que no ✅ (23/8)
+- [x] 6.3 · Una franja («a la tarde») **no elige el horario**: sólo se toma una
+      hora si la persona escribió un número ✅ (23/8)
 - [ ] 6.4 · Deducir el servicio desde el profesional **sólo si hace uno solo**,
-      y sacando el dato de aturno, nunca del modelo
+      y sacando el dato de aturno, nunca del modelo — *lo único que queda*
+
+> Lo demás quedó andando: «necesito cortarme el pelo el viernes» → «con Lean» →
+> horarios del viernes, sin volver a preguntar el día. Y lo que no se pudo usar
+> todavía se guarda para su paso (`_pendientes`).
 
 **Riesgos:**
 
@@ -218,9 +230,7 @@ modelo haga más: **el clasificador ya extrae todo eso y el flujo lo tira.**
 Los instrumentos están puestos y marcan todo en cero porque nadie los usó.
 Esto es lo que se puede medir **sin usuarios reales**.
 
-- [ ] **7.1 · Medir el buscador.** ¿Encuentra lo que el negocio tiene cargado?
-      Hoy no lo sé. Necesita el reindexado de la tarea 1. *(Quedó corriendo en
-      segundo plano el 21/8 — verificar si entró antes de rehacerlo.)*
+- [x] **7.1 · Medir el buscador** ✅ (22/8) — **17 de 17**
 - [ ] **7.2 · Medir la extracción de DATOS.** Está medido cuánto acierta
       entendiendo *qué* querés (92,9%). No está medido cuánto acierta sacando
       *la fecha, el servicio, la hora*. **Es el número que decide si la tarea 6
@@ -284,18 +294,18 @@ Tres huecos. Ninguno se rompió todavía; ninguno se probó tampoco.
 
 | # | Qué | Por qué ahí | Cuánto |
 |---|---|---|---|
-| **1** | 8.1 · Varias conversaciones a la vez | Si el candado tiene un bug, todo lo demás importa menos | horas |
-| **2** | 7.2 · Medir la extracción de datos | Es el número que decide si la tarea 6 es segura | horas |
-| **3** | 1 + 7.1 · Reindexar y medir el buscador | Está a medias y desbloquea saber si encuentra | horas |
-| **4** | 6 · Sacar el turno en un mensaje | Lo que más cambia lo que vive la persona | un día |
-| **5** | 7.3 · El simulador de clientes | El número que se le muestra a un negocio | un día |
-| **6** | 8.2 + 8.3 · Reinicio y aturno caído | Cerrar los huecos de confiabilidad | medio día |
-| **7** | 3 · Varios negocios | El techo del producto. Sin esto no hay segundo cliente | un día |
-| **8** | 4 · Enchufar el canal | Deja Meta a un cambio de bandera | un día |
-| **9** | 5 · Meta | Cuando haya cliente y monotributo | trámite |
+| **1** | 8.1 · Varias conversaciones a la vez | Si el candado tiene un bug, dos personas se mezclan los turnos. Es el único fallo del que un negocio no te perdona | horas |
+| **2** | 7.2 · Medir la extracción de datos | Desde ayer el bot **actúa** sobre los datos que extrae. Antes una fecha mal sacada se descartaba; ahora te manda al día equivocado. Ese número pasó de "bueno saberlo" a "hay que saberlo" | horas |
+| **3** | 3 · Varios negocios | El techo del producto. Sin esto no hay segundo cliente | un día |
+| **4** | 7.3 · El simulador de clientes | El número que se le muestra a un negocio | un día |
+| **5** | 8.2 + 8.3 · Reinicio y aturno caído | Cerrar los huecos de confiabilidad | medio día |
+| **6** | 4 · Enchufar el canal | Deja Meta a un cambio de bandera | un día |
+| **7** | 6.4 · Deducir el servicio del profesional | Chico y suma poco al lado del resto | horas |
+| **8** | 5 · Meta | Cuando haya cliente y monotributo | trámite |
 
-**Total hasta el punto 6: dos días y medio de trabajo.** Ahí el bot queda en
-9 / 8 / 9 / 3.
+**El 2 subió de puesto por lo de ayer**, y vale explicarlo: mientras las
+entidades se tiraban, que el clasificador sacara mal una fecha no tenía
+consecuencia. Ahora que el flujo avanza con ellas, sí la tiene.
 
 La tarea 2 es tuya y no depende de mí.
 
