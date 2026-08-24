@@ -144,7 +144,7 @@ create index if not exists senales_negocio on senales (business_id, tipo);
 """
 
 # Los cuatro tipos, escritos para que agregar uno sea agregarlo acá.
-TIPOS = ("no_entendio", "guardian", "demanda_perdida", "sin_respuesta")
+TIPOS = ("no_entendio", "guardian", "demanda_perdida", "sin_respuesta", "abuso")
 
 # El paso donde la gente escribe su nombre completo. De ahí NO se guarda el
 # texto: un nombre que el bot no entendió no se arregla mirando una tabla, así
@@ -332,6 +332,44 @@ async def resumen(business_id: str | None = None, solo_hoy: bool = False) -> dic
         "turnos_hasta_reservar": (int(median(f["turnos"] for f in reservadas))
                                   if reservadas else None),
     }
+
+
+async def cuellos_de_botella(business_id: str | None = None) -> list[dict]:
+    """En qué paso se traba la gente, contado por paso y no por frase.
+
+    Es la misma tabla que `senales`, agregada de otra manera, y las dos hacen
+    falta:
+
+      · Por FRASE dice qué enseñarle al bot — «tenés turno pa hoy?» ×6 es una
+        línea de código.
+      · Por PASO dice dónde está el problema — 20 tropiezos repartidos en veinte
+        frases distintas, todos en «elegir el horario», no se arreglan con una
+        línea: ahí lo que está mal es el paso.
+
+    Sin esta vista, veinte frases distintas se ven como veinte problemas chicos
+    en vez de como uno grande.
+    """
+    try:
+        pool = await _conexiones()
+        async with pool.connection() as c:
+            filas = await (await c.execute("""
+                select paso,
+                       count(*)                as tropiezos,
+                       count(distinct texto)   as frases,
+                       max(cuando)             as ultima
+                from senales
+                where tipo = 'no_entendio' and paso is not null
+                  and (%s::text is null or business_id = %s::text)
+                group by paso
+                order by count(*) desc
+            """, (business_id, business_id))).fetchall()
+        return [{"paso": f["paso"], "tropiezos": f["tropiezos"],
+                 "frases": f["frases"],
+                 "ultima": f["ultima"].isoformat() if f["ultima"] else None}
+                for f in filas]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("no se pudo leer los cuellos (%s): %s", type(e).__name__, e)
+        return []
 
 
 async def negocios() -> list[dict]:

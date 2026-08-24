@@ -873,29 +873,240 @@ def _cuando(iso: str | None) -> str:
     return f"hace {int(falta // 86400)} d"
 
 
-def _bloque(titulo: str, ayuda: str, filas: list[dict], vacio: str,
-            tono: str = "") -> str:
-    if not filas:
+# Cuántas veces tiene que pasar algo para que valga la pena mostrarlo.
+#
+# UNO NO ES UN DATO. «hacen depilación láser ×1» en una peluquería no es un
+# agujero: es una persona que se equivocó de local, y nunca se va a arreglar
+# porque no hay nada que arreglar. Mostrarlo al lado de algo que pasó nueve
+# veces le roba la atención a lo que sí importa.
+#
+# La repetición ES la señal de relevancia. Lo que pasa una vez se guarda igual
+# —está en `/senales` para quien lo quiera— pero no ocupa la pantalla.
+_MINIMO_PARA_MOSTRAR = 2
+
+
+def _bloque(titulo: str, ayuda: str, accion: str, filas: list[dict], vacio: str,
+            tono: str = "", colapsar_desde: int = 6) -> str:
+    """Un bloque del tablero: qué pasó, qué significa, y QUÉ HACER.
+
+    Los tres, siempre. Un dato sin acción atrás es ruido con formato: quien lo
+    mira asiente y no hace nada, y a la tercera vez deja de mirar el tablero.
+
+    `colapsar_desde` existe porque estas listas crecen sin techo. Veinte frases
+    que el bot no entendió empujan todo lo demás fuera de la pantalla, y lo que
+    importa son las primeras — están ordenadas por frecuencia justamente para
+    eso. El resto queda a un clic.
+    """
+    relevantes = [f for f in filas if f["veces"] >= _MINIMO_PARA_MOSTRAR]
+    sueltas = len(filas) - len(relevantes)
+
+    pie = (f'<p class="sueltas">Y {sueltas} que pasaron una sola vez. '
+           f'No se muestran: lo que pasa una vez no se arregla.</p>'
+           if sueltas else "")
+
+    if not relevantes:
         return (f'<section class="bloque"><h2>{titulo}</h2>'
                 f'<p class="ayuda">{ayuda}</p>'
-                f'<div class="tarjeta vacia">{vacio}</div></section>')
-    top = max(f["veces"] for f in filas)
-    renglones = "".join(
-        f'<li>'
-        f'<span class="veces {tono}">{f["veces"]}</span>'
-        f'<span class="barra"><i style="width:{f["veces"] / top * 100:.0f}%"></i></span>'
-        f'<span class="que">{_esc(f["texto"] or "—")}</span>'
-        f'<span class="meta">{_esc(_PASO_LEGIBLE.get(f.get("paso") or "", f.get("detalle") or ""))}'
-        f'<em>{_cuando(f.get("ultima"))}</em></span>'
-        f'</li>' for f in filas)
+                f'<div class="tarjeta vacia">{vacio}</div>{pie}</section>')
+
+    top = max(f["veces"] for f in relevantes)
+
+    def renglon(f):
+        return (f'<li><span class="veces {tono}">{f["veces"]}</span>'
+                f'<span class="barra"><i style="width:{f["veces"] / top * 100:.0f}%"></i></span>'
+                f'<span class="que">{_esc(f["texto"] or "—")}</span>'
+                f'<span class="meta">{_esc(_PASO_LEGIBLE.get(f.get("paso") or "", f.get("detalle") or ""))}'
+                f'<em>{_cuando(f.get("ultima"))}</em></span></li>')
+
+    visibles = "".join(renglon(f) for f in relevantes[:colapsar_desde])
+    ocultas = relevantes[colapsar_desde:]
+    extra = (f'<details><summary>ver las otras {len(ocultas)}</summary>'
+             f'<ol class="senales">{"".join(renglon(f) for f in ocultas)}</ol></details>'
+             if ocultas else "")
+
     return (f'<section class="bloque"><h2>{titulo}</h2>'
             f'<p class="ayuda">{ayuda}</p>'
-            f'<ol class="senales tarjeta">{renglones}</ol></section>')
+            f'<div class="tarjeta"><ol class="senales">{visibles}</ol>{extra}</div>'
+            f'<p class="accion">{accion}</p>{pie}</section>')
+
+
+_ESTILO = """
+:root{
+  --naranja:#ff5722; --naranja-claro:#ff7043;
+  --violeta:#6a1b9a;
+  --texto:#171717; --tenue:#737373; --borde:#e5e5e5; --papel:#fff; --fondo:#fafafa;
+  --radio:1rem; --sombra:0 2px 4px rgba(0,0,0,.06);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--fondo);color:var(--texto);font-family:Inter,system-ui,sans-serif;
+  font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+a{color:inherit}
+.marco{max-width:760px;margin:0 auto;padding:28px 18px 64px}
+h1{font-family:Poppins,sans-serif;font-size:26px;font-weight:700;letter-spacing:-.02em}
+h1 span{color:var(--naranja)}
+.sub{color:var(--tenue);font-size:13px;margin-top:2px}
+.volver{display:inline-flex;align-items:center;gap:6px;color:var(--tenue);
+  text-decoration:none;font-size:13px;font-weight:500;margin-bottom:14px}
+.volver:hover{color:var(--naranja)}
+
+.negocios{display:grid;gap:11px;margin-top:24px;list-style:none}
+.negocio{display:block;background:var(--papel);border:1px solid var(--borde);
+  border-radius:var(--radio);padding:16px 18px;text-decoration:none;
+  box-shadow:var(--sombra);transition:all .16s cubic-bezier(.32,.72,0,1)}
+.negocio:hover{border-color:var(--naranja-claro);transform:translateY(-1px);
+  box-shadow:0 6px 16px rgba(0,0,0,.07)}
+.negocio .nombre{font-family:Poppins,sans-serif;font-weight:600;font-size:16px;
+  display:flex;align-items:center;justify-content:space-between;gap:12px}
+.negocio .flecha{color:var(--tenue);font-weight:400}
+.negocio .cifras{display:flex;flex-wrap:wrap;gap:18px;margin-top:10px}
+.negocio .cifras div{font-size:12px;color:var(--tenue)}
+.negocio .cifras b{display:block;font-family:Poppins,sans-serif;font-size:19px;
+  font-weight:600;color:var(--texto);font-variant-numeric:tabular-nums;line-height:1.2}
+.negocio .cifras .clave b{color:var(--naranja)}
+.negocio .cifras .ojo b{color:var(--violeta)}
+.sin-datos{color:var(--tenue);font-size:12.5px;margin-top:8px}
+
+.tarjetas{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:11px;margin-top:22px}
+.t{background:var(--papel);border:1px solid var(--borde);border-radius:var(--radio);
+  padding:15px 16px;box-shadow:var(--sombra)}
+.t b{display:block;font-family:Poppins,sans-serif;font-size:clamp(19px,5.2vw,27px);
+  font-weight:600;line-height:1.15;letter-spacing:-.03em;font-variant-numeric:tabular-nums;
+  /* Sin esto «US$ 0.000» se desborda de su tarjeta en pantallas angostas: el
+     número es más ancho que la columna que le tocó y no hay dónde cortarlo. */
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.t.destacada b{color:var(--naranja)}
+.t span{color:var(--tenue);font-size:11.5px;display:block;margin-top:3px}
+
+.rotulo{display:flex;align-items:center;gap:10px;margin:38px 0 4px;
+  font-family:Poppins,sans-serif;font-size:11px;font-weight:600;letter-spacing:.1em;
+  text-transform:uppercase}
+.rotulo::after{content:"";flex:1;height:1px;background:var(--borde)}
+.rotulo.negocio-r{color:var(--violeta)}
+.rotulo.bot{color:var(--naranja)}
+
+.bloque{margin-top:20px}
+h2{font-family:Poppins,sans-serif;font-size:15.5px;font-weight:600}
+.ayuda{color:var(--tenue);font-size:12.5px;margin:1px 0 10px;max-width:62ch}
+.tarjeta{background:var(--papel);border:1px solid var(--borde);
+  border-radius:var(--radio);box-shadow:var(--sombra);overflow:hidden;list-style:none}
+.vacia{padding:16px;color:var(--tenue);font-size:13px}
+.senales li{display:grid;grid-template-columns:auto 46px 1fr auto;gap:11px;
+  align-items:center;padding:11px 15px;border-top:1px solid var(--borde)}
+.senales li:first-child{border-top:0}
+.veces{font-family:Poppins,sans-serif;font-weight:600;font-size:14px;min-width:1.6em;
+  text-align:right;font-variant-numeric:tabular-nums;color:var(--violeta)}
+.veces.alerta{color:var(--naranja)}
+.barra{height:5px;background:var(--fondo);border-radius:999px;overflow:hidden}
+.barra i{display:block;height:100%;background:var(--violeta);opacity:.55;border-radius:999px}
+.veces.alerta ~ .barra i{background:var(--naranja)}
+.que{word-break:break-word;font-size:14px}
+.meta{color:var(--tenue);font-size:11px;text-align:right;white-space:nowrap}
+.meta em{display:block;font-style:normal;opacity:.7}
+.dijo{display:block;font-style:normal;color:var(--tenue);font-size:12.5px;margin-top:2px}
+.accion{color:var(--texto);font-size:12.5px;margin-top:9px;padding-left:2px;max-width:62ch}
+.sueltas{color:var(--tenue);font-size:11.5px;margin-top:6px;font-style:italic}
+details{border-top:1px solid var(--borde)}
+details summary{cursor:pointer;padding:10px 15px;color:var(--tenue);font-size:12.5px;
+  font-weight:500;list-style:none}
+details summary::-webkit-details-marker{display:none}
+details summary::before{content:"▸ ";display:inline-block;transition:transform .16s}
+details[open] summary::before{transform:rotate(90deg)}
+details summary:hover{color:var(--naranja)}
+.avanzado{background:transparent;border:0;border-top:1px solid var(--borde);
+  margin-top:34px;padding-top:6px}
+.avanzado > summary{padding-left:0;font-family:Poppins,sans-serif;font-size:11px;
+  letter-spacing:.1em;text-transform:uppercase;font-weight:600}
+@media(max-width:520px){
+  .senales li{grid-template-columns:auto 1fr;row-gap:3px}
+  .barra{display:none} .meta{grid-column:2;text-align:left}
+}
+"""
+
+_CABEZA = """<!doctype html><html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{titulo}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@500;600;700&display=swap" rel="stylesheet">
+<style>{estilo}</style></head><body><div class="marco">"""
+
+
+def _pct(x) -> str:
+    return f"{x:.0%}" if isinstance(x, (int, float)) else "—"
+
+
+async def _todos_los_negocios() -> list[dict]:
+    """Los negocios configurados MÁS los que tienen datos, con sus números.
+
+    Los configurados van aunque no tengan una sola conversación, y eso es el
+    punto: un negocio que no aparece no se distingue de un negocio sin datos.
+    Pasó —«¿por qué no veo el otro negocio?»— y la respuesta era que existía
+    pero estaba mudo. Un tablero que esconde eso hace perder media hora.
+    """
+    con_datos = {n["business_id"]: n for n in await metricas.negocios()}
+    nombres = {t.business_id: t.nombre for t in TENANTS.values()}
+
+    filas = []
+    for bid in {*con_datos, *nombres}:
+        m = await metricas.resumen(bid)
+        sen = await metricas.senales(bid)
+        filas.append({
+            "id": bid,
+            "nombre": nombres.get(bid) or bid,
+            "conversaciones": m["cerradas"] + m["en_curso"],
+            "containment": m["containment"],
+            "reservadas": m["reservadas"],
+            "a_mirar": sum(len(v) for v in sen.values()),
+        })
+    # Los que tienen algo que mirar primero: es a lo que se entra.
+    return sorted(filas, key=lambda f: (-f["conversaciones"], f["nombre"]))
+
+
+async def _tablero_indice() -> str:
+    """Todos los negocios de un vistazo. Se entra a uno para el detalle.
+
+    Antes esto eran pestañas y sólo mostraba los que tenían datos. Un negocio
+    que existía pero no había hablado con nadie simplemente no aparecía, y desde
+    afuera se lee como «falta el negocio» y no como «falta el dato». Son dos
+    problemas distintos y hay que poder distinguirlos sin abrir la base.
+    """
+    negocios = await _todos_los_negocios()
+    g = GASTO.resumen()
+
+    if not negocios:
+        cuerpo = ('<div class="tarjeta vacia">Todavía no hay ningún negocio '
+                  'configurado.</div>')
+    else:
+        cuerpo = '<div class="negocios">' + "".join(
+            f'<a class="negocio" href="/tablero?negocio={_esc(n["id"])}">'
+            f'<div class="nombre">{_esc(n["nombre"])}<span class="flecha">→</span></div>'
+            + (f'<div class="cifras">'
+               f'<div class="clave"><b>{_pct(n["containment"])}</b>resueltas sin humano</div>'
+               f'<div><b>{n["reservadas"]}</b>turnos</div>'
+               f'<div><b>{n["conversaciones"]}</b>conversaciones</div>'
+               f'<div class="ojo"><b>{n["a_mirar"]}</b>cosas para mirar</div>'
+               f'</div>'
+               if n["conversaciones"] or n["a_mirar"]
+               else '<p class="sin-datos">Todavía nadie le escribió. '
+                    'Está configurado y esperando.</p>')
+            + '</a>' for n in negocios) + '</div>'
+
+    return (_CABEZA.format(titulo="Tablero · aturno", estilo=_ESTILO) + f"""
+<h1>Tablero <span>·</span> aturno</h1>
+<p class="sub">{len(negocios)} negocio(s) · US$&nbsp;{g.get("usd", 0):.3f} de modelo hoy</p>
+{cuerpo}
+</div></body></html>""")
 
 
 @app.get("/tablero", response_class=HTMLResponse)
 async def tablero(negocio: str | None = None) -> str:
-    """Los datos, para mirarlos. Con la estética del panel de aturno.
+    """Sin `?negocio=`, la lista de todos. Con él, el detalle de uno.
+
+    Una sola ruta y no dos, porque son la misma pregunta a distinta altura:
+    «cómo va todo» y «cómo va éste». Separarlas en dos URLs obliga a acordarse
+    de cuál es cuál.
+
+    Los datos, para mirarlos. Con la estética del panel de aturno.
 
     Los números existían desde `metricas.py`, pero un endpoint que devuelve JSON
     no lo mira nadie — y un dato que nadie mira es lo mismo que un dato que no
@@ -912,11 +1123,8 @@ async def tablero(negocio: str | None = None) -> str:
     teléfono ni ningún dato de ninguna persona. Son conteos y frases sueltas, y
     del paso del nombre no se guarda ni el texto.
     """
-    lista = await metricas.negocios()
-    # Sin `?negocio=`, se abre en el que más datos tiene: es el que se quiere
-    # mirar nueve de cada diez veces, y una pantalla que arranca vacía se cierra.
-    if negocio is None and lista:
-        negocio = lista[0]["business_id"]
+    if negocio is None:
+        return await _tablero_indice()
 
     m = await metricas.resumen(negocio)
     sen = await metricas.senales(negocio)
@@ -925,11 +1133,18 @@ async def tablero(negocio: str | None = None) -> str:
     def pct(x):
         return f"{x:.0%}" if isinstance(x, (int, float)) else "—"
 
-    pestanas = "".join(
-        f'<a class="pest{" activa" if n["business_id"] == negocio else ""}" '
-        f'href="/tablero?negocio={_esc(n["business_id"])}">{_esc(n["business_id"])}'
-        f'<b>{n["conversaciones"] + n["senales"]}</b></a>'
-        for n in lista) or '<span class="pest vacia">todavía sin datos</span>'
+    cuellos = await metricas.cuellos_de_botella(negocio)
+    if cuellos:
+        top_c = max(c["tropiezos"] for c in cuellos)
+        cuellos_html = '<ol class="senales tarjeta">' + "".join(
+            f'<li><span class="veces alerta">{c["tropiezos"]}</span>'
+            f'<span class="barra"><i style="width:{c["tropiezos"] / top_c * 100:.0f}%"></i></span>'
+            f'<span class="que">{_esc(_PASO_LEGIBLE.get(c["paso"], c["paso"]))}'
+            f'<em class="dijo">{c["frases"]} frase(s) distinta(s)</em></span>'
+            f'<span class="meta"><em>{_cuando(c.get("ultima"))}</em></span></li>'
+            for c in cuellos) + '</ol>'
+    else:
+        cuellos_html = '<div class="tarjeta vacia">Ningún paso está costando trabajo.</div>'
 
     caidas = m["abandono_por_paso"] or {}
     frases = m.get("abandono_frases") or {}
@@ -1024,10 +1239,9 @@ h2{{font-family:Poppins,sans-serif;font-size:15.5px;font-weight:600}}
 }}
 </style></head><body><div class="marco">
 
-<h1>Tablero <span>·</span> {_esc(negocio or "sin negocios")}</h1>
+<a class="volver" href="/tablero">← todos los negocios</a>
+<h1>{_esc(negocio)}</h1>
 <p class="sub">{m["cerradas"]} conversaciones terminadas · {m["en_curso"]} en curso</p>
-
-<nav class="pestanas">{pestanas}</nav>
 
 <div class="tarjetas">
   <div class="t destacada"><b>{pct(m["containment"])}</b><span>resueltas sin humano</span></div>
@@ -1037,35 +1251,59 @@ h2{{font-family:Poppins,sans-serif;font-size:15.5px;font-weight:600}}
   <div class="t"><b>US$&nbsp;{g.get("usd", 0):.3f}</b><span>modelo, hoy</span></div>
 </div>
 
-<p class="rotulo negocio">Para el negocio</p>
-{_bloque("Te pidieron estos turnos y no tenías lugar",
-         "Cada uno es una persona que quiso reservar y se fue con las manos vacías. "
-         "Si un día se repite, ahí te falta agenda.",
+<p class="rotulo negocio-r">Para el negocio</p>
+{_bloque("Turnos que no pudiste dar",
+         "Quisieron reservar y no tenías lugar. Agrupado por día de la semana y "
+         "franja, no por fecha: un negocio no abre el sábado 29, abre los sábados.",
+         "→ Si un día se repite, ahí conviene abrir agenda o sumar a alguien.",
          sen["demanda_perdida"],
          "Todo lo que te pidieron estaba disponible.")}
-{_bloque("Te preguntaron esto y el bot no sabía",
-         "No está cargado en tus respuestas. Lo cargás una vez desde el panel y "
-         "de ahí en más lo contesta solo.",
+{_bloque("Preguntas que te repiten y no tenés cargadas",
+         "El bot contestó «eso no lo tengo» y no inventó nada. Pero si la misma "
+         "pregunta vuelve, es una respuesta que te falta.",
+         "→ Cargalas desde el panel, en Asistente de WhatsApp → Qué contesta. "
+         "Se carga una vez y de ahí en más las contesta solo.",
          sen["sin_respuesta"],
-         "Supo contestar todo lo que le preguntaron.")}
+         "Supo contestar todo lo que le preguntaron más de una vez.")}
 
-<p class="rotulo bot">Para arreglar el bot</p>
+<p class="rotulo bot">Dónde se traba la gente</p>
+<section class="bloque"><h2>Los pasos que más cuestan</h2>
+<p class="ayuda">Cuántas veces el bot no entendió, por paso. Si un paso junta muchos
+tropiezos repartidos en frases distintas, el problema no son las frases: es el paso.</p>
+{cuellos_html}
+<p class="accion">→ Un paso con muchas frases distintas se arregla cambiando cómo
+pregunta. Con pocas frases repetidas, enseñándole esas frases.</p></section>
+
 <section class="bloque"><h2>Dónde dejan la conversación</h2>
-<p class="ayuda">En qué paso se fueron sin reservar, y lo último que escribieron antes
-de irse. El paso dice dónde; la frase dice por qué.</p>
+<p class="ayuda">En qué paso se fueron sin reservar, y lo último que escribieron
+antes de irse. El paso dice dónde; la frase dice por qué.</p>
 {caidas_html}</section>
+
 {_bloque("Frases que el bot no entendió",
-         "Escribieron esto y el bot no supo qué querían. Si una se repite, conviene "
-         "enseñársela: son dos líneas de código y después la entiende gratis, sin "
-         "consultarle a la IA.",
+         "Escribieron esto y no supo qué querían. Ordenado por cuántas veces pasó.",
+         "→ Las de arriba son dos líneas de código, y después las entiende gratis, "
+         "sin consultarle a la IA.",
          sen["no_entendio"],
-         "Entendió todo lo que le escribieron.", tono="alerta")}
-{_bloque("Respuestas que no dejamos salir",
-         "El bot armó una respuesta que decía algo que vos no cargaste, y se frenó "
-         "antes de mandarla: salió el texto tal cual lo escribiste. Acá está la palabra "
-         "que la frenó — si es un sinónimo inofensivo que se repite, hay que permitirlo.",
+         "Entendió todo lo que le escribieron más de una vez.", tono="alerta")}
+
+{_bloque("Intentos de romperlo",
+         "Mensajes desmedidos: nadie escribe 800 caracteres para pedir un turno. "
+         "El bot los recorta antes de leerlos, así que no llegan a ningún lado.",
+         "→ Si se repite el mismo tipo de intento, avisale al negocio y bloqueá el "
+         "número desde Twilio.",
+         sen["abuso"],
+         "Nadie intentó nada raro.", tono="alerta")}
+
+<details class="avanzado"><summary>Detalle técnico</summary>
+{_bloque("Respuestas que el bot frenó solo",
+         "Iba a contestar algo que no estaba en lo que cargó el negocio y se frenó: "
+         "salió el texto tal cual. Es la red que impide que invente.",
+         "→ Sirve para una sola cosa: si la MISMA palabra frena muchas respuestas y "
+         "es un sinónimo inofensivo, la red está demasiado apretada. Si no se "
+         "repite, está haciendo su trabajo y no hay nada que hacer.",
          sen["guardian"],
-         "No hubo que frenar ninguna respuesta.", tono="alerta")}
+         "No hubo que frenar ninguna respuesta.")}
+</details>
 
 </div></body></html>"""
 

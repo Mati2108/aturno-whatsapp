@@ -379,6 +379,14 @@ async def entender(conv: Conversacion, config) -> dict:
     hoy = hoy_del_negocio()
     if len(texto) > MAX_MENSAJE:
         logger.info("mensaje de %d caracteres recortado a %d", len(texto), MAX_MENSAJE)
+        # Un mensaje de más de 400 caracteres no lo escribe un cliente pidiendo
+        # turno: lo escribe alguien probando si le puede meter instrucciones al
+        # modelo. Se recorta igual —el recorte es la defensa— pero se anota,
+        # porque un negocio tiene derecho a saber que le están golpeando la
+        # puerta y hoy no se entera nunca.
+        asyncio.create_task(metricas.anotar(
+            "abuso", (config.get("configurable") or {}).get("business_id", "?"),
+            estado.value, texto[:80], f"mensaje de {len(texto)} caracteres"))
         texto = texto[:MAX_MENSAJE]
     resultado: Clasificacion = await clasificar(
         _clasificador, texto, estado, opciones,
@@ -952,14 +960,38 @@ def _lo_dijo_para(paso: Estado, ent: dict, conv: Conversacion) -> bool:
     return False
 
 
-def _dia_legible(iso: str | None) -> str | None:
-    """'2026-08-29' -> 'Sábado 29'. Para lo que va a leer una persona."""
+# Las franjas, para agrupar. Un pedido a las 10:30 y otro a las 11 son el mismo
+# problema —falta agenda a la mañana— y contarlos por separado los esconde a los
+# dos abajo de la lista.
+_FRANJAS = ((12, "a la mañana"), (18, "a la tarde"), (24, "a la noche"))
+
+
+def _lo_que_pidio(conv: Conversacion) -> str | None:
+    """Qué quiso reservar, agrupado por DÍA DE LA SEMANA y franja.
+
+    No por fecha exacta, y esa es toda la diferencia entre un dato y un ruido.
+    «Sábado 29 ×1» no le dice nada a nadie: pasó una vez y ya pasó. «Sábado a la
+    mañana ×9» es una instrucción — ahí falta agenda, todas las semanas.
+
+    Un negocio no abre el sábado 29; abre los sábados.
+    """
+    iso = conv.get("fecha")
     if not iso:
         return None
     try:
-        return P._dia_corto(date.fromisoformat(iso))
-    except (TypeError, ValueError):
-        return iso
+        dia = DIAS_ES[date.fromisoformat(iso).weekday()].capitalize()
+    except (TypeError, ValueError, IndexError):
+        return None
+
+    hora = conv.get("hora") or ""
+    try:
+        h = int(str(hora).split(":")[0])
+        franja = next(f for tope, f in _FRANJAS if h < tope)
+        return f"{dia} {franja}"
+    except (ValueError, IndexError, StopIteration):
+        # Sin hora, el día solo. Sigue siendo accionable: «los sábados» ya dice
+        # dónde mirar, aunque no diga a qué hora.
+        return f"{dia}"
 
 
 async def _abrir(saltear: set[Estado], negocio: str) -> dict:
@@ -1620,8 +1652,7 @@ async def responder(conv: Conversacion, config) -> dict:
         # puede inventar nada.
         asyncio.create_task(metricas.anotar(
             "demanda_perdida", negocio, estado.value,
-            _dia_legible(conv.get("fecha")) or conv.get("mensaje"),
-            datos.get("motivo")))
+            _lo_que_pidio(conv), datos.get("motivo")))
 
         alts = [Alternativa(fecha=date.fromisoformat(a["fecha"]),
                             hora=datetime.strptime(a["hora"], "%H:%M").time(),
