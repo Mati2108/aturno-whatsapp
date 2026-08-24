@@ -952,6 +952,16 @@ def _lo_dijo_para(paso: Estado, ent: dict, conv: Conversacion) -> bool:
     return False
 
 
+def _dia_legible(iso: str | None) -> str | None:
+    """'2026-08-29' -> 'Sábado 29'. Para lo que va a leer una persona."""
+    if not iso:
+        return None
+    try:
+        return P._dia_corto(date.fromisoformat(iso))
+    except (TypeError, ValueError):
+        return iso
+
+
 async def _abrir(saltear: set[Estado], negocio: str) -> dict:
     """Muestra la apertura y deja el flujo listo para el próximo mensaje.
 
@@ -1603,9 +1613,15 @@ async def responder(conv: Conversacion, config) -> dict:
         # vendible de todos —«14 personas quisieron sábado a la mañana y no
         # tenías lugar» es plata que el negocio dejó de ganar, contada— y hasta
         # ahora se usaba para contestar y se tiraba.
+        #
+        # El día va LEGIBLE, no en ISO. Es un tablero que mira un dueño de
+        # peluquería: «2026-08-29» no le dice nada de un vistazo y «Sábado 29»
+        # sí. La fecha ya está validada contra la agenda, así que formatearla no
+        # puede inventar nada.
         asyncio.create_task(metricas.anotar(
             "demanda_perdida", negocio, estado.value,
-            conv.get("fecha") or conv.get("mensaje"), datos.get("motivo")))
+            _dia_legible(conv.get("fecha")) or conv.get("mensaje"),
+            datos.get("motivo")))
 
         alts = [Alternativa(fecha=date.fromisoformat(a["fecha"]),
                             hora=datetime.strptime(a["hora"], "%H:%M").time(),

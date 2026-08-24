@@ -315,6 +315,35 @@ async def resumen(business_id: str | None = None, solo_hoy: bool = False) -> dic
     }
 
 
+async def negocios() -> list[dict]:
+    """Los negocios que tienen datos, con cuánto tiene cada uno.
+
+    Sirve para el selector del tablero. Sale de las dos tablas y no de
+    `TENANTS`: lo que interesa mostrar es dónde HAY algo para mirar, no la lista
+    de configurados — un negocio dado de alta ayer y sin una sola conversación
+    es una pestaña vacía que ensucia.
+    """
+    try:
+        pool = await _conexiones()
+        async with pool.connection() as c:
+            filas = await (await c.execute("""
+                select business_id,
+                       count(*) filter (where origen = 'conv')  as conversaciones,
+                       count(*) filter (where origen = 'senal') as senales
+                from (
+                    select business_id, 'conv'  as origen from conversaciones
+                    union all
+                    select business_id, 'senal' as origen from senales
+                ) todo
+                group by business_id
+                order by count(*) desc
+            """)).fetchall()
+        return [dict(f) for f in filas]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("no se pudo listar los negocios (%s): %s", type(e).__name__, e)
+        return []
+
+
 # ══════════════════════════════════════════════════════════════════
 #  Para los tests
 # ══════════════════════════════════════════════════════════════════

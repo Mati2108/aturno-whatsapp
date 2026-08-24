@@ -838,123 +838,220 @@ async def metricas_() -> dict:
 
 
 @app.get("/senales")
-async def senales_() -> dict:
-    """Lo que el bot no supo hacer, agrupado y ordenado por frecuencia.
-
-    El JSON crudo, para quien lo quiera procesar. La versión que se mira con los
-    ojos es `/tablero`.
-    """
-    return await metricas.senales()
+async def senales_(negocio: str | None = None) -> dict:
+    """Lo que el bot no supo hacer, agrupado. El JSON; la vista es `/tablero`."""
+    return await metricas.senales(negocio)
 
 
-def _lista(titulo: str, ayuda: str, filas: list[dict], vacio: str) -> str:
-    """Un bloque del tablero. Sin filas, dice qué significa eso."""
+def _esc(t) -> str:
+    return (str(t if t is not None else "")
+            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
+
+_PASO_LEGIBLE = {
+    "apertura": "el saludo", "esperando_servicio": "elegir el servicio",
+    "esperando_staff": "elegir con quién", "esperando_dia": "elegir el día",
+    "esperando_horario": "elegir el horario", "esperando_nombre": "dar el nombre",
+    "esperando_confirmacion": "confirmar", "esperando_senia": "pagar la seña",
+    "confirmado": "turno confirmado", "en_manos_humanas": "con una persona",
+}
+
+
+def _cuando(iso: str | None) -> str:
+    """«hace 3 h». Un ISO no le dice nada a nadie de un vistazo."""
+    if not iso:
+        return ""
+    try:
+        falta = (ahora() - _dt.datetime.fromisoformat(iso)).total_seconds()
+    except Exception:  # noqa: BLE001
+        return ""
+    if falta < 3600:
+        return f"hace {int(falta // 60)} min"
+    if falta < 86400:
+        return f"hace {int(falta // 3600)} h"
+    return f"hace {int(falta // 86400)} d"
+
+
+def _bloque(titulo: str, ayuda: str, filas: list[dict], vacio: str,
+            tono: str = "") -> str:
     if not filas:
-        return (f'<section><h2>{titulo}</h2><p class="ayuda">{ayuda}</p>'
-                f'<p class="vacio">{vacio}</p></section>')
+        return (f'<section class="bloque"><h2>{titulo}</h2>'
+                f'<p class="ayuda">{ayuda}</p>'
+                f'<div class="tarjeta vacia">{vacio}</div></section>')
+    top = max(f["veces"] for f in filas)
     renglones = "".join(
-        f'<li><b>{f["veces"]}</b><span>{_escapar(f["texto"] or "—")}</span>'
-        f'<i>{_escapar(f.get("detalle") or f.get("paso") or "")}</i></li>'
-        for f in filas)
-    return (f'<section><h2>{titulo}</h2><p class="ayuda">{ayuda}</p>'
-            f'<ol class="senales">{renglones}</ol></section>')
-
-
-def _escapar(t: str) -> str:
-    return (str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+        f'<li>'
+        f'<span class="veces {tono}">{f["veces"]}</span>'
+        f'<span class="barra"><i style="width:{f["veces"] / top * 100:.0f}%"></i></span>'
+        f'<span class="que">{_esc(f["texto"] or "—")}</span>'
+        f'<span class="meta">{_esc(_PASO_LEGIBLE.get(f.get("paso") or "", f.get("detalle") or ""))}'
+        f'<em>{_cuando(f.get("ultima"))}</em></span>'
+        f'</li>' for f in filas)
+    return (f'<section class="bloque"><h2>{titulo}</h2>'
+            f'<p class="ayuda">{ayuda}</p>'
+            f'<ol class="senales tarjeta">{renglones}</ol></section>')
 
 
 @app.get("/tablero", response_class=HTMLResponse)
-async def tablero() -> str:
-    """Una página para abrir en el celular. Sin instalar nada.
+async def tablero(negocio: str | None = None) -> str:
+    """Los datos, para mirarlos. Con la estética del panel de aturno.
 
-    Los números existen desde que se escribió `metricas.py`, pero un endpoint
-    que devuelve JSON no lo mira nadie — y un dato que nadie mira es lo mismo
-    que un dato que no existe. Por eso esto es HTML y no una API más.
+    Los números existían desde `metricas.py`, pero un endpoint que devuelve JSON
+    no lo mira nadie — y un dato que nadie mira es lo mismo que un dato que no
+    existe. Por eso esto es una página y no una API más.
 
-    Dos mitades, y la división importa:
+    DOS MITADES, Y LA DIVISIÓN ES EL PUNTO
+    · PARA EL NEGOCIO — eso es producto. «14 personas quisieron sábado y no
+      tenías lugar» es plata que se perdió, contada, y ningún competidor se la
+      está dando al dueño.
+    · PARA EL BOT — para quien lo mantiene. Cada línea es una tarea concreta:
+      una frase que se repite es una fila que falta en una tabla de atajos.
 
-      · LO QUE ARREGLA EL BOT — para quien lo mantiene. Cada línea es una tarea
-        concreta: una frase que se repite es una fila que falta en una tabla.
-      · LO QUE ARREGLA EL NEGOCIO — eso es producto. «14 personas quisieron
-        sábado y no tenías lugar» es plata que se perdió, contada, y ningún
-        competidor se la está dando al dueño.
-
-    Público como `/gasto` y `/salud`, y por el mismo motivo: acá no hay ningún
+    Público como `/gasto` y `/salud`, y por el mismo motivo: no hay acá ningún
     teléfono ni ningún dato de ninguna persona. Son conteos y frases sueltas, y
     del paso del nombre no se guarda ni el texto.
     """
-    m = await metricas.resumen()
-    sen = await metricas.senales()
+    lista = await metricas.negocios()
+    # Sin `?negocio=`, se abre en el que más datos tiene: es el que se quiere
+    # mirar nueve de cada diez veces, y una pantalla que arranca vacía se cierra.
+    if negocio is None and lista:
+        negocio = lista[0]["business_id"]
+
+    m = await metricas.resumen(negocio)
+    sen = await metricas.senales(negocio)
     g = GASTO.resumen()
 
     def pct(x):
         return f"{x:.0%}" if isinstance(x, (int, float)) else "—"
 
-    caidas = "".join(
-        f'<li><b>{n}</b><span>{_escapar(paso.replace("esperando_", ""))}</span></li>'
-        for paso, n in (m["abandono_por_paso"] or {}).items()) or \
-        '<li class="vacio">Todavía nadie abandonó a mitad.</li>'
+    pestanas = "".join(
+        f'<a class="pest{" activa" if n["business_id"] == negocio else ""}" '
+        f'href="/tablero?negocio={_esc(n["business_id"])}">{_esc(n["business_id"])}'
+        f'<b>{n["conversaciones"] + n["senales"]}</b></a>'
+        for n in lista) or '<span class="pest vacia">todavía sin datos</span>'
+
+    caidas = (await metricas.resumen(negocio))["abandono_por_paso"] or {}
+    if caidas:
+        top = max(caidas.values())
+        filas_caidas = "".join(
+            f'<li><span class="veces alerta">{n}</span>'
+            f'<span class="barra"><i style="width:{n / top * 100:.0f}%"></i></span>'
+            f'<span class="que">{_esc(_PASO_LEGIBLE.get(p, p))}</span></li>'
+            for p, n in caidas.items())
+        caidas_html = f'<ol class="senales tarjeta">{filas_caidas}</ol>'
+    else:
+        caidas_html = '<div class="tarjeta vacia">Todavía nadie abandonó a mitad.</div>'
 
     return f"""<!doctype html><html lang="es"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tablero · aturno</title><style>
-:root{{--fondo:#0f1115;--caja:#171a21;--texto:#e8eaed;--tenue:#9aa0a6;--linea:#262b34;--acento:#7cc4a4}}
-*{{box-sizing:border-box}}
-body{{margin:0;padding:20px 16px 48px;background:var(--fondo);color:var(--texto);
- font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}}
-h1{{font-size:20px;margin:0 0 4px}}
-.sub{{color:var(--tenue);font-size:13px;margin:0 0 24px}}
-.tarjetas{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:28px}}
-.t{{background:var(--caja);border:1px solid var(--linea);border-radius:12px;padding:14px}}
-.t b{{display:block;font-size:26px;line-height:1.1;font-variant-numeric:tabular-nums}}
-.t span{{color:var(--tenue);font-size:12px}}
-h2{{font-size:15px;margin:28px 0 2px}}
-.ayuda{{color:var(--tenue);font-size:12px;margin:0 0 10px}}
-ol.senales,ul{{list-style:none;margin:0;padding:0;background:var(--caja);
- border:1px solid var(--linea);border-radius:12px;overflow:hidden}}
-li{{display:flex;gap:12px;align-items:baseline;padding:10px 14px;border-top:1px solid var(--linea)}}
-li:first-child{{border-top:0}}
-li b{{min-width:2.2em;color:var(--acento);font-variant-numeric:tabular-nums}}
-li span{{flex:1;word-break:break-word}}
-li i{{color:var(--tenue);font-size:11px;font-style:normal;white-space:nowrap}}
-.vacio{{color:var(--tenue);font-size:13px;padding:12px 14px}}
-.corte{{margin:36px 0 0;border:0;border-top:1px solid var(--linea)}}
-.rotulo{{color:var(--acento);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin:26px 0 0}}
-</style></head><body>
-<h1>Tablero</h1>
+<title>Tablero · {_esc(negocio or "aturno")}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{{
+  --naranja:#ff5722; --naranja-claro:#ff7043; --naranja-suave:#fff1ed;
+  --violeta:#6a1b9a; --violeta-suave:#f5edfa;
+  --texto:#171717; --tenue:#737373; --borde:#e5e5e5; --papel:#fff; --fondo:#fafafa;
+  --radio:1rem; --sombra:0 2px 4px rgba(0,0,0,.06);
+}}
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{background:var(--fondo);color:var(--texto);font-family:Inter,system-ui,sans-serif;
+  font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}}
+.marco{{max-width:760px;margin:0 auto;padding:28px 18px 64px}}
+h1{{font-family:Poppins,sans-serif;font-size:26px;font-weight:700;letter-spacing:-.02em}}
+h1 span{{color:var(--naranja)}}
+.sub{{color:var(--tenue);font-size:13px;margin-top:2px}}
+
+.pestanas{{display:flex;gap:8px;overflow-x:auto;margin:22px 0 26px;padding-bottom:4px;
+  scrollbar-width:none}}
+.pestanas::-webkit-scrollbar{{display:none}}
+.pest{{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:9px 15px;
+  background:var(--papel);border:1px solid var(--borde);border-radius:999px;
+  color:var(--tenue);text-decoration:none;font-size:13px;font-weight:500;
+  transition:all .16s cubic-bezier(.32,.72,0,1)}}
+.pest:hover{{border-color:var(--naranja-claro);color:var(--texto)}}
+.pest b{{background:var(--fondo);color:var(--tenue);font-size:11px;font-weight:600;
+  padding:1px 7px;border-radius:999px}}
+.pest.activa{{background:var(--naranja);border-color:var(--naranja);color:#fff;
+  box-shadow:0 2px 8px rgba(255,87,34,.28)}}
+.pest.activa b{{background:rgba(255,255,255,.22);color:#fff}}
+
+.tarjetas{{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:11px}}
+.t{{background:var(--papel);border:1px solid var(--borde);border-radius:var(--radio);
+  padding:15px 16px;box-shadow:var(--sombra)}}
+.t b{{display:block;font-family:Poppins,sans-serif;font-size:27px;font-weight:600;
+  line-height:1.15;letter-spacing:-.02em;font-variant-numeric:tabular-nums}}
+.t.destacada b{{color:var(--naranja)}}
+.t span{{color:var(--tenue);font-size:11.5px;display:block;margin-top:3px}}
+
+.rotulo{{display:flex;align-items:center;gap:10px;margin:38px 0 4px;
+  font-family:Poppins,sans-serif;font-size:11px;font-weight:600;letter-spacing:.1em;
+  text-transform:uppercase}}
+.rotulo::after{{content:"";flex:1;height:1px;background:var(--borde)}}
+.rotulo.negocio{{color:var(--violeta)}}
+.rotulo.bot{{color:var(--naranja)}}
+
+.bloque{{margin-top:20px}}
+h2{{font-family:Poppins,sans-serif;font-size:15.5px;font-weight:600}}
+.ayuda{{color:var(--tenue);font-size:12.5px;margin:1px 0 10px;max-width:62ch}}
+.tarjeta{{background:var(--papel);border:1px solid var(--borde);
+  border-radius:var(--radio);box-shadow:var(--sombra);overflow:hidden;list-style:none}}
+.vacia{{padding:16px;color:var(--tenue);font-size:13px}}
+.senales li{{display:grid;grid-template-columns:auto 46px 1fr auto;gap:11px;
+  align-items:center;padding:11px 15px;border-top:1px solid var(--borde)}}
+.senales li:first-child{{border-top:0}}
+.veces{{font-family:Poppins,sans-serif;font-weight:600;font-size:14px;min-width:1.6em;
+  text-align:right;font-variant-numeric:tabular-nums;color:var(--violeta)}}
+.veces.alerta{{color:var(--naranja)}}
+.barra{{height:5px;background:var(--fondo);border-radius:999px;overflow:hidden}}
+.barra i{{display:block;height:100%;background:var(--violeta);opacity:.55;border-radius:999px}}
+.veces.alerta ~ .barra i{{background:var(--naranja)}}
+.que{{word-break:break-word;font-size:14px}}
+.meta{{color:var(--tenue);font-size:11px;text-align:right;white-space:nowrap}}
+.meta em{{display:block;font-style:normal;opacity:.7}}
+@media(max-width:520px){{
+  .senales li{{grid-template-columns:auto 1fr;row-gap:3px}}
+  .barra{{display:none}} .meta{{grid-column:2;text-align:left}}
+}}
+</style></head><body><div class="marco">
+
+<h1>Tablero <span>·</span> {_esc(negocio or "sin negocios")}</h1>
 <p class="sub">{m["cerradas"]} conversaciones terminadas · {m["en_curso"]} en curso</p>
 
+<nav class="pestanas">{pestanas}</nav>
+
 <div class="tarjetas">
-  <div class="t"><b>{pct(m["containment"])}</b><span>resueltas sin humano</span></div>
+  <div class="t destacada"><b>{pct(m["containment"])}</b><span>resueltas sin humano</span></div>
   <div class="t"><b>{pct(m["escalacion"])}</b><span>pasaron a una persona</span></div>
   <div class="t"><b>{m["reservadas"]}</b><span>turnos sacados</span></div>
   <div class="t"><b>{m["turnos_hasta_reservar"] or "—"}</b><span>mensajes por turno</span></div>
-  <div class="t"><b>US$ {g.get("usd", 0):.3f}</b><span>gastado hoy</span></div>
+  <div class="t"><b>US$&nbsp;{g.get("usd", 0):.3f}</b><span>modelo, hoy</span></div>
 </div>
 
-<p class="rotulo">Para el negocio</p>
-{_lista("Turnos que se perdieron",
-        "Pidieron esto y no había lugar. Cada uno es plata que no entró.",
-        sen["demanda_perdida"], "Nadie pidió algo que no estuviera disponible.")}
-{_lista("Preguntas sin responder",
-        "Te preguntaron esto y no está cargado. Cargalo desde el panel.",
-        sen["sin_respuesta"], "No quedó ninguna pregunta sin responder.")}
+<p class="rotulo negocio">Para el negocio</p>
+{_bloque("Turnos que se perdieron",
+         "Pidieron esto y no había lugar. Cada uno es plata que no entró.",
+         sen["demanda_perdida"], "Nadie pidió algo que no estuviera disponible.")}
+{_bloque("Preguntas sin responder",
+         "Te preguntaron esto y no está cargado. Se carga desde el panel y el bot lo contesta solo.",
+         sen["sin_respuesta"], "No quedó ninguna pregunta sin responder.")}
 
-<hr class="corte">
-<p class="rotulo">Para arreglar el bot</p>
-<section><h2>Dónde se cae la gente</h2>
+<p class="rotulo bot">Para arreglar el bot</p>
+<section class="bloque"><h2>Dónde se cae la gente</h2>
 <p class="ayuda">En qué paso abandonaron. Dice QUÉ arreglar, no que algo anda mal.</p>
-<ul>{caidas}</ul></section>
-{_lista("Lo que no entendió",
-        "Cada frase repetida es una fila que falta en la tabla de atajos: "
-        "arreglarla no cuesta ni un peso ni una llamada al modelo.",
-        sen["no_entendio"], "Entendió todo lo que le escribieron.")}
-{_lista("Lo que frenó el guardián",
-        "Redacciones que no salieron al aire. Si son muchas de la misma regla, "
-        "a la lista de palabras le falta algo.",
-        sen["guardian"], "No frenó ninguna redacción.")}
-</body></html>"""
+{caidas_html}</section>
+{_bloque("Lo que no entendió",
+         "Cada frase repetida es una fila que falta en la tabla de atajos: arreglarla no "
+         "cuesta ni un peso ni una llamada al modelo.",
+         sen["no_entendio"], "Entendió todo lo que le escribieron.", tono="alerta")}
+{_bloque("Lo que frenó el guardián",
+         "Redacciones que no salieron al aire por si inventaban algo. Si se repite la misma "
+         "regla, a la lista de palabras le falta una.",
+         sen["guardian"], "No frenó ninguna redacción.", tono="alerta")}
+
+</div></body></html>"""
 
 
 @app.get("/salud", response_model=Salud)
