@@ -623,6 +623,13 @@ async def avanzar(conv: Conversacion, config) -> dict:
             texto, fragmentos, caido = "", 0, True
 
         if caido:
+            # Se anota como falla del SISTEMA, no de la persona ni del negocio.
+            # Sin esto, una cuota agotada se ve en el tablero como un pico de
+            # «no lo tengo cargado» y el dueño sale a cargar respuestas que ya
+            # tenía cargadas.
+            asyncio.create_task(metricas.anotar(
+                "buscador_caido", negocio, estado.value, None,
+                "no se pudo buscar"))
             return {"_plantilla": "buscador_caido", "_datos": {}}
 
         # Sin texto, el negocio no tiene cargada esa respuesta. La pregunta va

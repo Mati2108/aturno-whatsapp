@@ -301,15 +301,46 @@ async def embudo(business_id: str | None = None) -> list[dict]:
     try:
         pool = await _conexiones()
         async with pool.connection() as c:
+            # LLEGAR A UN PASO NO ES ESCRIBIR EN ÉL.
+            #
+            # La primera versión contaba sólo `paso_antes`, o sea las
+            # conversaciones que MANDARON un mensaje estando en ese paso. Quien
+            # llega y nunca vuelve a escribir —que es la definición de
+            # abandonar— no quedaba contado como que llegó, así que el embudo
+            # mostraba 13 de 13 en un paso donde tres personas se habían ido.
+            #
+            # El abandono es justamente lo que un embudo tiene que mostrar, y
+            # era lo único que no mostraba.
+            #
+            # Se llega a un paso si algún mensaje te DEJÓ ahí (`paso_despues`) o
+            # si escribiste estando ahí (`paso_antes`). La unión de los dos.
             filas = await (await c.execute("""
-                select paso_antes as paso,
-                       count(distinct conversacion) as llegaron,
-                       count(distinct conversacion) filter (where avanzo) as pasaron,
-                       count(*) as mensajes
-                from eventos
-                where (%s::text is null or business_id = %s::text)
-                group by paso_antes
-            """, (business_id, business_id))).fetchall()
+                with tocados as (
+                    select conversacion, paso_antes as paso from eventos
+                    where (%s::text is null or business_id = %s::text)
+                    union
+                    select conversacion, paso_despues as paso from eventos
+                    where (%s::text is null or business_id = %s::text)
+                ),
+                pasados as (
+                    select distinct conversacion, paso_antes as paso from eventos
+                    where avanzo and (%s::text is null or business_id = %s::text)
+                ),
+                escritos as (
+                    select paso_antes as paso, count(*) as mensajes from eventos
+                    where (%s::text is null or business_id = %s::text)
+                    group by paso_antes
+                )
+                select t.paso,
+                       count(distinct t.conversacion) as llegaron,
+                       count(distinct p.conversacion) as pasaron,
+                       coalesce(max(e.mensajes), 0) as mensajes
+                from tocados t
+                left join pasados p
+                       on p.paso = t.paso and p.conversacion = t.conversacion
+                left join escritos e on e.paso = t.paso
+                group by t.paso
+            """, (business_id,) * 8)).fetchall()
     except Exception as e:  # noqa: BLE001
         logger.warning("no se pudo leer el embudo (%s): %s", type(e).__name__, e)
         return []
@@ -572,6 +603,103 @@ async def negocios() -> list[dict]:
     except Exception as e:  # noqa: BLE001
         logger.warning("no se pudo listar los negocios (%s): %s", type(e).__name__, e)
         return []
+
+
+# ══════════════════════════════════════════════════════════════════
+#  El catálogo de fallas
+# ══════════════════════════════════════════════════════════════════
+
+# TODO LO QUE PUEDE SALIR MAL, Y NO HUBO QUE INVENTARLO.
+#
+# `plantillas.py` tiene 41 plantillas y 18 son "algo salió mal". Cada una es un
+# modo de falla que el bot YA detecta y YA sabe nombrar — lo único que faltaba
+# era contar cuál salió.
+#
+# Contarlas así, por plantilla y no con un contador a medida por cada una,
+# tiene una propiedad que vale más que el ahorro de código: **una plantilla de
+# error nueva aparece en el tablero sin tocar el tablero**. Con cinco
+# contadores escritos a mano, las otras trece pasaban y se perdían — incluidas
+# `error_tecnico` y `no_pudo_contestar`, que son las peores de todas.
+#
+# El texto de cada una está escrito para el que la va a leer, no para el que
+# escribió la función: "No entendí lo que dijo" y no "no_entendi".
+FALLAS = {
+    # ── Lo que ve la persona ──────────────────────────────────────
+    "no_entendi": ("persona", "No entendí lo que me escribió"),
+    "sin_dato": ("persona", "Me preguntaron algo que el negocio no cargó"),
+    "fuera_de_alcance": ("persona", "Me pidieron algo que no sé hacer"),
+    "solo_adjunto": ("persona", "Mandaron una foto o un audio, sin texto"),
+    "sin_texto": ("persona", "Mandaron algo sin una sola palabra"),
+    "atascado": ("persona", "Se trabó y le ofrecí el link y una persona"),
+    "escalado": ("persona", "Pidió hablar con alguien del local"),
+    "demorado": ("persona", "Tardé tanto que le avisé que estaba pensando"),
+    "demasiados_mensajes": ("persona", "Escribió tantas veces que frené"),
+    "sesion_reiniciada": ("persona", "Volvió tan tarde que se le venció lo elegido"),
+
+    # ── Lo que pasa con el turno ──────────────────────────────────
+    "no_disponible": ("turno", "Pidió un día u hora que no estaba"),
+    "no_reservo": ("turno", "Dijo que NO en el resumen"),
+    "senia_vencida": ("turno", "Se le venció el tiempo para pagar la seña"),
+    "no_se_pudo_cobrar": ("turno", "No se pudo generar el link de pago"),
+    "no_puedo_cancelar": ("turno", "Quiso cancelar un turno ya confirmado"),
+
+    # ── Lo que pasa por detrás ────────────────────────────────────
+    "error_tecnico": ("sistema", "Se rompió algo y no supe qué contestar"),
+    "no_pudo_contestar": ("sistema", "No llegué a contestar a tiempo"),
+    "buscador_caido": ("sistema", "No pude buscar en lo que cargó el negocio"),
+    # Éstas no son plantillas: son eventos propios, porque el bot las sabe y no
+    # le dice nada a la persona. Se anotan con `anotar` y aparecen acá igual.
+    "guardian": ("sistema", "Frené una respuesta que decía algo no cargado"),
+    "abuso": ("sistema", "Mensajes desmedidos, de alguien probando"),
+    "proveedor_caido": ("sistema", "Se cayó el proveedor del modelo"),
+    "cuota_agotada": ("sistema", "Se acabó la cuota diaria de búsquedas"),
+}
+
+
+async def catalogo(business_id: str | None = None) -> list[dict]:
+    """Las fallas conocidas, con cuántas veces pasó cada una. TODAS.
+
+    Las que nunca pasaron vienen en cero, y ésa es la mitad que faltaba: un
+    tablero que sólo lista lo que falló no distingue «esto está bien» de «esto
+    no lo estamos mirando», y desde afuera las dos se ven igual.
+
+    Las que pasaron van primero, porque son a las que hay que mirar.
+    """
+    conteos: dict[str, dict] = {}
+    try:
+        pool = await _conexiones()
+        async with pool.connection() as c:
+            # De los eventos, por plantilla.
+            for f in await (await c.execute("""
+                select plantilla, count(*) as veces, max(cuando) as ultima
+                from eventos
+                where plantilla is not null
+                  and (%s::text is null or business_id = %s::text)
+                group by plantilla
+            """, (business_id, business_id))).fetchall():
+                conteos[f["plantilla"]] = f
+            # Y de las señales, para las que no tienen plantilla.
+            for f in await (await c.execute("""
+                select tipo as plantilla, count(*) as veces, max(cuando) as ultima
+                from senales
+                where (%s::text is null or business_id = %s::text)
+                group by tipo
+            """, (business_id, business_id))).fetchall():
+                conteos.setdefault(f["plantilla"], f)
+    except Exception as e:  # noqa: BLE001
+        # Con la base caída se devuelve el catálogo entero en cero, y no una
+        # lista vacía: la lista de lo que PUEDE fallar no depende de la base.
+        logger.warning("no se pudo leer el catálogo (%s): %s", type(e).__name__, e)
+
+    salida = []
+    for clave, (grupo, titulo) in FALLAS.items():
+        f = conteos.get(clave) or {}
+        salida.append({
+            "plantilla": clave, "grupo": grupo, "titulo": titulo,
+            "veces": f.get("veces", 0),
+            "ultima": f["ultima"].isoformat() if f.get("ultima") else None,
+        })
+    return sorted(salida, key=lambda f: (-f["veces"], f["titulo"]))
 
 
 # ══════════════════════════════════════════════════════════════════

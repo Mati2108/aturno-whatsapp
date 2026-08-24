@@ -1033,7 +1033,12 @@ h2{font-family:Poppins,sans-serif;font-size:15px;font-weight:600;overflow-wrap:a
 .que{flex:1;font-size:14.5px;overflow-wrap:anywhere}
 .pct{flex:0 0 auto;color:var(--tenue);font-size:12px;font-variant-numeric:tabular-nums}
 .fila2{display:flex;align-items:center;gap:10px;margin:6px 0 0 calc(1.4em + 10px)}
-.barra{flex:1 1 40px;height:6px;background:#f0f0f0;border-radius:999px;overflow:hidden}
+.barra{flex:1 1 40px;height:7px;background:#f0f0f0;border-radius:999px;overflow:hidden}
+/* La barra del embudo no ocupa todo el ancho: su ANCHO es cuánta gente llegó a
+   ese paso, así el embudo se angosta de un escalón al siguiente. Y adentro, lo
+   lleno son los que siguieron. Dos cosas en una barra, y las dos se leen. */
+.barra.embudo{flex:0 0 auto;max-width:56%;background:#fde8e0}
+.barra.embudo i{background:var(--violeta)}
 .barra i{display:block;height:100%;background:var(--violeta);border-radius:999px}
 .alerta ~ .fila2 .barra i,.fila2.alerta .barra i{background:var(--naranja)}
 .ctx{flex:0 1 auto;color:var(--tenue);font-size:11px;overflow-wrap:anywhere;
@@ -1043,7 +1048,20 @@ h2{font-family:Poppins,sans-serif;font-size:15px;font-weight:600;overflow-wrap:a
 .ctx b{font-weight:600}
 .mal{color:var(--naranja)}
 .ojo{color:var(--violeta)}
-.bien{color:#3f9e6b}
+.bien{color:#3f9e6b;font-size:11px}
+
+/* Los chips son los mismos del panel (`AsistenteWhatsApp.css`): píldora de
+   999px, verde #dcfce7/#15803d, rojo #fef2f2/#b91c1c. Copiarlos en vez de
+   inventar unos nuevos es lo que hace que esto se lea como el mismo producto. */
+h3{font-family:Poppins,sans-serif;font-size:12.5px;font-weight:600;
+  color:var(--tenue);margin:18px 0 7px}
+.falla{display:flex;align-items:center;gap:11px}
+.chip{flex:0 0 auto;border-radius:999px;padding:3px 11px;font-size:11.5px;
+  font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums}
+.chip.ok{background:#dcfce7;color:#15803d;border:1px solid #86efac}
+.chip.mal{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+.falla .que{font-size:13.5px}
+.falla .meta{flex:0 0 auto;color:var(--tenue);font-size:11px;white-space:nowrap}
 
 details{border-top:1px solid var(--borde)}
 details summary{cursor:pointer;padding:10px 15px;color:var(--tenue);font-size:12.5px;
@@ -1211,31 +1229,74 @@ async def tablero(negocio: str | None = None) -> str:
         base = max(p["llegaron"] for p in pasos) or 1
 
         def _fila_paso(p):
-            # Dos fallas distintas, y se marcan distinto porque se arreglan
-            # distinto: la CAÍDA dice que el paso está mal planteado; los
-            # MENSAJES POR CONVERSACIÓN dicen que se entiende mal pero la gente
-            # insiste — no se ve de ninguna otra forma y suele salir más barato.
+            # LA BARRA DIBUJA A LOS QUE SIGUIERON, no a los que llegaron.
+            #
+            # Estaba al revés y era la queja más justa del tablero: «elegir el
+            # día · 6 → 4 · 33% se fue acá» con la barra llena hasta el tope.
+            # Una barra que no se mueve cuando se pierde un tercio de la gente
+            # no está dibujando nada.
+            #
+            # Ahora el ancho es cuántos siguieron sobre cuántos llegaron, y el
+            # hueco que queda a la derecha son los que se fueron. La forma del
+            # embudo se ve sola.
+            paso_ok = (p["pasaron"] / p["llegaron"] * 100) if p["llegaron"] else 0
+            # Y el alto de la fila es proporcional a cuánta gente llegó, así se
+            # ve el angostamiento de un escalón al siguiente.
+            ancho_total = (p["llegaron"] / base * 100) if base else 0
+
             notas = []
             if p["caida"]:
-                notas.append(f'<b class="mal">{p["caida"]:.0%} se fue acá</b>')
+                perdidos = p["llegaron"] - p["pasaron"]
+                notas.append(f'<b class="mal">{perdidos} se fue'
+                             f'{"" if perdidos == 1 else "ron"} acá</b>')
             if (p["mensajes_por_conversacion"] or 0) > 1.3:
                 notas.append(f'<b class="ojo">{p["mensajes_por_conversacion"]} '
                              f'mensajes cada uno</b>')
-            if not notas:
-                notas.append('<b class="bien">limpio</b>')
+            # Sin la palabra «limpio». Un paso sin problemas no necesita una
+            # etiqueta: siete «limpio» en minúscula son ruido, y lo que se
+            # busca en esta lista es lo que NO está limpio. Va un punto y nada.
+            marca = '' if notas else '<b class="bien">●</b>'
+
             return (f'<li><div class="fila1">'
                     f'<span class="que">{_esc(_PASO_LEGIBLE.get(p["paso"], p["paso"]))}</span>'
-                    f'<span class="pct">{p["llegaron"]} → {p["pasaron"]}</span></div>'
+                    f'<span class="pct">{p["llegaron"]} llegaron · '
+                    f'{p["pasaron"]} siguieron</span></div>'
                     f'<div class="fila2">'
-                    f'<span class="barra"><i style="width:'
-                    f'{p["llegaron"] / base * 100:.0f}%"></i></span>'
-                    f'<span class="ctx">{" · ".join(notas)}</span></div></li>')
+                    f'<span class="barra embudo" style="width:{ancho_total:.0f}%">'
+                    f'<i style="width:{paso_ok:.0f}%"></i></span>'
+                    f'<span class="ctx">{" ".join(notas) or marca}</span></div></li>')
 
         embudo_html = ('<ol class="senales tarjeta">'
                        + "".join(_fila_paso(p) for p in pasos) + '</ol>')
     else:
         embudo_html = ('<div class="tarjeta vacia">Todavía no hay conversaciones '
                        'para dibujar el recorrido.</div>')
+
+    # ---- El catálogo: todo lo que puede salir mal ----
+    #
+    # Las 22 fallas conocidas, TODAS, incluidas las que nunca pasaron. Ésa es
+    # la mitad que faltaba: sin ella, «no aparece en el tablero» y «no lo
+    # estamos mirando» se ven igual, y son cosas opuestas.
+    fallas = await metricas.catalogo(negocio)
+    _GRUPOS = (("persona", "Lo que le pasa a la persona"),
+               ("turno", "Lo que pasa con el turno"),
+               ("sistema", "Lo que pasa por detrás"))
+    catalogo_html = ""
+    for clave, titulo in _GRUPOS:
+        delgrupo = [f for f in fallas if f["grupo"] == clave]
+        if not delgrupo:
+            continue
+        filas_cat = "".join(
+            f'<li class="falla">'
+            f'<span class="chip {"mal" if f["veces"] else "ok"}">'
+            f'{f["veces"] + 0 if f["veces"] else "nunca"}'
+            + ("" if not f["veces"] else " ve" + ("z" if f["veces"] == 1 else "ces"))
+            + f'</span>'
+            f'<span class="que">{_esc(f["titulo"])}</span>'
+            f'<span class="meta">{_cuando(f.get("ultima"))}</span></li>'
+            for f in delgrupo)
+        catalogo_html += (f'<h3>{titulo}</h3>'
+                          f'<ol class="senales tarjeta">{filas_cat}</ol>')
 
     caidas = m["abandono_por_paso"] or {}
     frases = m.get("abandono_frases") or {}
@@ -1316,6 +1377,11 @@ antes de irse. El paso dice dónde; la frase dice por qué.</p>
          "número desde Twilio.",
          sen["abuso"],
          "Nadie intentó nada raro.", tono="alerta")}
+
+<p class="rotulo bot">Todo lo que puede salir mal</p>
+<p class="ayuda">La lista completa de lo que el bot sabe que puede fallar. En verde
+lo que nunca pasó: eso está cubierto y no hay que tocarlo.</p>
+{catalogo_html}
 
 <details class="avanzado"><summary>Detalle técnico</summary>
 {_bloque("Respuestas que el bot frenó solo",
@@ -1417,6 +1483,10 @@ async def whatsapp(
         # conversación, que sigue donde estaba.
         if _tiene_adjunto(NumMedia):
             respuesta, que = P.solo_adjunto(MediaContentType0), MediaContentType0 or "?"
+            # En Argentina media clientela manda audios, y hasta ahora no había
+            # una sola fila que lo dijera. Un negocio que ve «34 audios este
+            # mes» entiende algo de sus clientes que ningún otro dato le da.
+            _anotar_de_fondo("solo_adjunto", negocio, detalle=que)
         elif Latitude or Longitude:
             respuesta, que = P.solo_ubicacion(), "ubicación"
         else:
@@ -1472,6 +1542,10 @@ async def whatsapp(
     if not atender:
         logger.warning("%s pasó el tope de %d mensajes por minuto",
                        mensaje.de, TOPE_POR_MINUTO)
+        # Que alguien golpee la puerta a fuerza de volumen es información del
+        # negocio, no sólo una línea de log que nadie lee.
+        _anotar_de_fondo("demasiados_mensajes", negocio,
+                         detalle=f"más de {TOPE_POR_MINUTO} por minuto")
         if avisar:
             await _enviar(mensaje.de, negocio, P.demasiados_mensajes())
         return PlainTextResponse("", status_code=200)
@@ -1506,6 +1580,22 @@ async def _verificar_firma(request: Request, firma: str) -> None:
     if not RequestValidator(cfg.twilio_auth_token).validate(url, parametros, firma):
         logger.warning("Firma inválida para %s — request rechazado", url)
         raise HTTPException(status_code=403, detail="Firma de Twilio inválida")
+
+
+def _anotar_de_fondo(que: str, negocio: Tenant, detalle: str | None = None,
+                     paso: str | None = None, texto: str | None = None) -> None:
+    """Deja constancia de algo que hasta ahora sólo iba al log. Nunca levanta.
+
+    Existe porque había categorías enteras sin una sola fila —los audios, el
+    tope de mensajes, los pedidos de cancelar— y desde el tablero eso no se
+    distingue de que nunca hubieran pasado. Son dos cosas opuestas: una es que
+    está bien, la otra es que nadie lo está mirando.
+    """
+    try:
+        asyncio.create_task(
+            metricas.anotar(que, negocio.business_id, paso, texto, detalle))
+    except Exception:  # noqa: BLE001 — anotar nunca puede romper una respuesta
+        pass
 
 
 async def _paso_de(hilo: str) -> str | None:
@@ -1753,6 +1843,12 @@ async def _procesar_bajo_candado(
         except Exception:  # noqa: BLE001 — un aviso que falla no rompe la respuesta
             logger.warning("no se pudo avisar la demora a %s", mensaje.de, exc_info=True)
 
+    # Qué plantilla terminó saliendo. Se arranca sin nada y la fija el camino
+    # que gane: el grafo la deja en el estado, y los dos caminos de error de
+    # acá abajo la ponen a mano — son justamente los que hasta ahora se
+    # perdían, y son los peores de todos.
+    plantilla_usada: str | None = None
+
     aviso = asyncio.create_task(_avisar_demora())
     try:
         # Con techo de tiempo. Un except no alcanza: si el procesamiento se
@@ -1773,9 +1869,11 @@ async def _procesar_bajo_candado(
         # la persona: reintentar contra algo que acaba de fallar es lo último
         # que quiere hacer, y probablemente falle otra vez.
         texto = P.no_pudo_contestar(negocio.nombre, salidas)
+        plantilla_usada = "no_pudo_contestar"
     except Exception:  # noqa: BLE001 — el usuario merece una respuesta igual
         logger.exception("Falló al procesar el mensaje de %s", mensaje.de)
         texto = P.no_pudo_contestar(negocio.nombre, salidas)
+        plantilla_usada = "no_pudo_contestar"
     finally:
         # Se cancela SIEMPRE, incluso cuando hubo error: si la respuesta ya
         # salió —aunque sea la de disculpa— avisar después que "está tardando"
@@ -1795,6 +1893,10 @@ async def _procesar_bajo_candado(
             st = await _grafo.aget_state(
                 {"configurable": {"thread_id": hilo_de(negocio.business_id, mensaje.de)}})
             estado_ahora = (st.values or {}).get("estado")
+            # La plantilla que eligió el grafo. Es lo que convierte el catálogo
+            # de fallas en algo que se llena solo: cada plantilla de error que
+            # exista aparece contada, sin código nuevo por cada una.
+            plantilla_usada = plantilla_usada or (st.values or {}).get("_plantilla")
             # Sale de la misma lectura que ya se hacía: pedirlo aparte sería
             # una consulta más por mensaje para un dato que ya está en la mano.
             nombre_dado = (st.values or {}).get("nombre")
@@ -1830,6 +1932,7 @@ async def _procesar_bajo_candado(
         paso_despues=estado_ahora or paso_antes or "apertura",
         avanzo=bool(estado_ahora and estado_ahora != paso_antes),
         demoro_ms=int((time.monotonic() - empezo) * 1000),
+        plantilla=plantilla_usada,
         # El texto SÓLO cuando no avanzó: lo que el bot entendió bien no hay
         # que arreglarlo, y son mensajes de personas.
         texto=None if (estado_ahora and estado_ahora != paso_antes) else mensaje.texto))

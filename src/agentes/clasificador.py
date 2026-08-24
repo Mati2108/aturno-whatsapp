@@ -285,6 +285,7 @@ async def clasificar(
             "modelo. El bot sigue con los atajos; el texto libre cae en "
             "DESCONOCIDO. Subí TOPE_DIARIO_USD o esperá al día siguiente.",
             GASTO.usd_hoy(), config().tope_diario_usd)
+        _avisar_al_tablero("cuota_agotada", "tope diario de gasto alcanzado")
         return Clasificacion(intent=Intencion.DESCONOCIDO)
 
     # Al principal se le pregunta salvo que acabe de fallar. Ver el comentario
@@ -313,4 +314,32 @@ async def clasificar(
             logger.error("el respaldo %s también falló (%s)", nombre, e)
 
     logger.warning("no contestó ningún proveedor; sigo con DESCONOCIDO")
+    _avisar_al_tablero("proveedor_caido", "no contestó ningún proveedor")
     return Clasificacion(intent=Intencion.DESCONOCIDO)
+
+
+# El negocio no se sabe acá adentro: el clasificador es de todos. Se anota sin
+# negocio y el tablero lo muestra en el bloque de sistema, que es donde va.
+_SIN_NEGOCIO = "*"
+
+
+def _avisar_al_tablero(que: str, detalle: str) -> None:
+    """Deja constancia de una falla de INFRAESTRUCTURA. Nunca levanta.
+
+    Es el agujero más caro que tenía la observabilidad: cuando se cae el
+    proveedor o se acaba el tope, todo el texto libre cae en DESCONOCIDO. Desde
+    el tablero eso se ve **idéntico a que la gente escriba raro** — un pico de
+    "no entendí" sin causa— y manda a arreglar el bot cuando lo que hay que
+    hacer es poner una tarjeta.
+
+    Distinguirlo cuesta esta función.
+    """
+    try:
+        import asyncio
+
+        from src import metricas
+
+        asyncio.get_running_loop()
+        asyncio.create_task(metricas.anotar(que, _SIN_NEGOCIO, None, None, detalle))
+    except Exception:  # noqa: BLE001 — avisar nunca puede romper una respuesta
+        pass

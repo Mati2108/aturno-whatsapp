@@ -306,10 +306,33 @@ async def t7_el_embudo():
           e["esperando_horario"]["mensajes_por_conversacion"], 3.0)
     igual("y el servicio costó 1", e["esperando_servicio"]["mensajes_por_conversacion"], 1.0)
 
+    # ---- Y quien llega y NUNCA vuelve a escribir, llegó igual ----
+    #
+    # Es la definición de abandonar, y era lo único que el embudo no mostraba:
+    # contando sólo a quien mandó un mensaje ESTANDO en el paso, el que llega y
+    # se va no figuraba ni como que llegó. El embudo decía «13 de 13» en un
+    # paso donde tres personas se habían ido.
+    for i in range(4):
+        conv = f"{NEGE}:fuga{i}"
+        await M.evento(conv, NEGE, "esperando_servicio", "esperando_staff",
+                       avanzo=True)
+        # Y se fue. No hay un solo evento con paso_antes = esperando_staff.
+
+    e2 = {f["paso"]: f for f in await M.embudo(NEGE)}
+    igual("los que llegaron y se fueron cuentan como que llegaron",
+          e2["esperando_staff"]["llegaron"], 4)
+    igual("y como que NO pasaron", e2["esperando_staff"]["pasaron"], 0)
+    igual("o sea, se fue el 100% de los que llegaron ahí",
+          e2["esperando_staff"]["caida"], 1.0)
+
+    # El orden se afirma contra `_ORDEN_PASOS` y no contra una lista escrita a
+    # mano acá: un embudo desordenado deja de ser un embudo —lo que se lee es
+    # la caída de un escalón al siguiente— y con la lista repetida en dos
+    # lados, agregar un paso al flujo rompía el test por el motivo equivocado.
+    vistos = [f["paso"] for f in await M.embudo(NEGE)]
+    esperado = [p for p in M._ORDEN_PASOS if p in vistos]
     chequear("los pasos vienen en el orden del flujo, no por frecuencia",
-             [f["paso"] for f in await M.embudo(NEGE)][:3] ==
-             ["esperando_servicio", "esperando_dia", "esperando_horario"],
-             str([f["paso"] for f in await M.embudo(NEGE)]))
+             vistos == esperado, str(vistos))
 
     # ---- Y no puede tumbar nada ----
     original, M._URL = M._URL, "postgresql://nadie@127.0.0.1:1/no-existe"
@@ -324,6 +347,87 @@ async def t7_el_embudo():
         M._URL = original
         M.olvidar_pool()
         await M.borrar_negocio(NEGE)
+
+
+async def t8_el_catalogo_de_fallas():
+    """Todo lo que puede salir mal, y también lo que NUNCA salió mal.
+
+    El catálogo no hay que inventarlo: `plantillas.py` tiene 41 plantillas y 18
+    son «algo salió mal». Cada una es un modo de falla que el bot ya detecta y
+    ya sabe nombrar. Lo único que faltaba era contar cuál salió.
+
+    Contarlas así —por plantilla y no con código a medida por cada una— tiene
+    una propiedad que vale más que el ahorro: **una plantilla de error nueva
+    aparece en el tablero sin tocar el tablero**. Con cinco contadores a mano,
+    las trece restantes pasaban y se perdían, incluidas `error_tecnico` y
+    `no_pudo_contestar`, que son las peores.
+
+    Y la mitad que no existía: **cuáles nunca pasaron**. Un tablero que sólo
+    lista lo que falló no dice si el resto está bien o si nadie lo está
+    mirando, y esas dos cosas se ven igual desde afuera.
+    """
+    print(f"\n{NEGRITA}[8] EL CATÁLOGO: LO QUE FALLÓ Y LO QUE NUNCA FALLÓ{FIN}")
+    print(f"{GRIS}  18 plantillas de error ya existen. Sólo había que contarlas.{FIN}")
+
+    NEGC = NEG + "-catalogo"
+
+    # Salen tres plantillas de error, con formas distintas a propósito.
+    for i in range(4):
+        await M.evento(f"{NEGC}:a{i}", NEGC, "esperando_servicio",
+                       "esperando_servicio", avanzo=False, plantilla="no_entendi")
+    for i in range(2):
+        await M.evento(f"{NEGC}:b{i}", NEGC, "esperando_dia", "esperando_dia",
+                       avanzo=False, plantilla="sin_dato")
+    await M.evento(f"{NEGC}:c", NEGC, "esperando_dia", "esperando_dia",
+                   avanzo=False, plantilla="error_tecnico")
+    # Y una que NO es un error: no tiene que aparecer en el catálogo.
+    await M.evento(f"{NEGC}:d", NEGC, "esperando_dia", "esperando_horario",
+                   avanzo=True, plantilla="lista_horarios")
+
+    cat = {f["plantilla"]: f for f in await M.catalogo(NEGC)}
+
+    igual("cuenta la que más salió", cat["no_entendi"]["veces"], 4)
+    igual("y cuenta las otras", cat["sin_dato"]["veces"], 2)
+    igual("incluido el error técnico, que antes se perdía",
+          cat["error_tecnico"]["veces"], 1)
+
+    chequear("una plantilla que NO es un error no entra al catálogo",
+             "lista_horarios" not in cat, str(sorted(cat))[:80])
+
+    # ---- La mitad que faltaba: lo que nunca pasó ----
+    #
+    # Sin esto, «no aparece» y «no lo estamos mirando» se ven igual, y son
+    # cosas opuestas: una es que está bien, la otra es que no sabés.
+    chequear("las que nunca salieron también están listadas",
+             "atascado" in cat and "no_pudo_contestar" in cat,
+             str(sorted(cat))[:110])
+    igual("y figuran en cero", cat["atascado"]["veces"], 0)
+
+    chequear("cada una viene con un nombre en castellano, no el de la función",
+             cat["no_entendi"]["titulo"] and "_" not in cat["no_entendi"]["titulo"],
+             repr(cat["no_entendi"].get("titulo")))
+    chequear("y con a quién le importa",
+             cat["no_entendi"]["grupo"] in ("persona", "turno", "sistema"),
+             str(cat["no_entendi"].get("grupo")))
+
+    # Las que pasaron van primero: es a lo que hay que mirar.
+    orden = [f["plantilla"] for f in await M.catalogo(NEGC)]
+    igual("la más frecuente encabeza la lista", orden[0], "no_entendi")
+
+    # ---- Y no puede tumbar nada ----
+    original, M._URL = M._URL, "postgresql://nadie@127.0.0.1:1/no-existe"
+    M.olvidar_pool()
+    try:
+        vacio = await M.catalogo(NEGC)
+        chequear("con la base caída sigue listando el catálogo, todo en cero",
+                 len(vacio) > 10 and all(f["veces"] == 0 for f in vacio),
+                 f"{len(vacio)} filas")
+    except Exception as ex:  # noqa: BLE001
+        chequear(f"NO tenía que levantar: {type(ex).__name__}", False, str(ex)[:70])
+    finally:
+        M._URL = original
+        M.olvidar_pool()
+        await M.borrar_negocio(NEGC)
 
 
 async def main() -> int:
@@ -348,6 +452,7 @@ async def main() -> int:
         await t5_no_guarda_telefonos()
         await t6_las_senales_se_acumulan()
         await t7_el_embudo()
+        await t8_el_catalogo_de_fallas()
     finally:
         await M.borrar_negocio(NEG)
         await M.cerrar()
