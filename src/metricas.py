@@ -115,7 +115,36 @@ create table if not exists conversaciones (
     cerrada_en    timestamptz
 );
 create index if not exists conversaciones_negocio on conversaciones (business_id);
+
+-- Lo que el bot YA detecta y hasta ahora tiraba.
+--
+-- Cada vez que no entiende, que el guardián frena una redacción, que alguien
+-- pide un horario que no está o que preguntan algo sin cargar, el bot lo sabe:
+-- lo usa para contestar y después se pierde en un log que nadie lee.
+--
+-- Una tabla sola para los cuatro tipos, y no cuatro tablas. Todos tienen la
+-- misma forma —qué pasó, dónde, con qué texto— y lo que se hace con ellos
+-- también es lo mismo: agrupar y contar. Cuatro tablas serían cuatro consultas
+-- iguales y cuatro lugares donde olvidarse de agregar un tipo nuevo.
+create table if not exists senales (
+    id          bigserial primary key,
+    tipo        text        not null,
+    business_id text        not null,
+    paso        text,
+    texto       text,
+    detalle     text,
+    cuando      timestamptz not null
+);
+create index if not exists senales_negocio on senales (business_id, tipo);
 """
+
+# Los cuatro tipos, escritos para que agregar uno sea agregarlo acá.
+TIPOS = ("no_entendio", "guardian", "demanda_perdida", "sin_respuesta")
+
+# El paso donde la gente escribe su nombre completo. De ahí NO se guarda el
+# texto: un nombre que el bot no entendió no se arregla mirando una tabla, así
+# que guardarlo es quedarse con un dato personal a cambio de nada.
+_PASO_PRIVADO = "esperando_nombre"
 
 
 async def preparar() -> None:
@@ -157,6 +186,69 @@ async def registrar(hilo: str, business_id: str, estado: str,
                   t if desenlace else None))
     except Exception as e:  # noqa: BLE001
         logger.warning("no se pudo registrar la métrica (%s): %s", type(e).__name__, e)
+
+
+async def anotar(tipo: str, business_id: str, paso: str | None = None,
+                 texto: str | None = None, detalle: str | None = None,
+                 cuando: datetime | None = None) -> None:
+    """Guarda algo que el bot detectó y hasta ahora tiraba. Nunca levanta.
+
+    `texto` es lo que se va a agrupar después: el mensaje que no entendió, la
+    palabra que frenó el guardián, el día que pidieron y no había. Es lo único
+    que convierte una estadística en algo accionable — «falló 7 veces» no dice
+    qué arreglar; «"tenés turno pa hoy?" falló 7 veces» sí.
+
+    Del paso del nombre no se guarda el texto. Ver `_PASO_PRIVADO`.
+    """
+    if paso == _PASO_PRIVADO:
+        texto = None
+    try:
+        pool = await _conexiones()
+        async with pool.connection() as c:
+            await c.execute(
+                "insert into senales (tipo, business_id, paso, texto, detalle, cuando)"
+                " values (%s, %s, %s, %s, %s, %s)",
+                (tipo, business_id, paso, (texto or "").strip()[:200] or None,
+                 detalle, cuando or ahora()))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("no se pudo anotar la señal (%s): %s", type(e).__name__, e)
+
+
+async def senales(business_id: str | None = None, tope: int = 25) -> dict:
+    """Lo que el bot no supo hacer, AGRUPADO y ordenado por frecuencia.
+
+    Agrupar es toda la función. Una lista de incidentes sueltos se mira una vez
+    y se abandona; «esta frase falló 7 veces» se arregla, porque el número dice
+    solo cuál vale la pena.
+
+    Y por eso también va ordenado: lo primero de cada lista es lo próximo que
+    conviene tocar.
+    """
+    vacio = {t: [] for t in TIPOS}
+    try:
+        pool = await _conexiones()
+        async with pool.connection() as c:
+            filas = await (await c.execute("""
+                select tipo, texto, detalle,
+                       min(paso)  as paso,
+                       count(*)   as veces,
+                       max(cuando) as ultima
+                from senales
+                where (%s::text is null or business_id = %s::text)
+                group by tipo, texto, detalle
+                order by count(*) desc, max(cuando) desc
+            """, (business_id, business_id))).fetchall()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("no se pudo leer las señales (%s): %s", type(e).__name__, e)
+        return vacio
+
+    for f in filas:
+        grupo = vacio.setdefault(f["tipo"], [])
+        if len(grupo) < tope:
+            grupo.append({"texto": f["texto"], "detalle": f["detalle"],
+                          "paso": f["paso"], "veces": f["veces"],
+                          "ultima": f["ultima"].isoformat() if f["ultima"] else None})
+    return vacio
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -242,6 +334,8 @@ async def borrar_negocio(business_id: str) -> None:
         pool = await _conexiones()
         async with pool.connection() as c:
             await c.execute("delete from conversaciones where business_id = %s",
+                            (business_id,))
+            await c.execute("delete from senales where business_id = %s",
                             (business_id,))
     except Exception:  # noqa: BLE001
         pass

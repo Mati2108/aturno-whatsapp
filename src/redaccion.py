@@ -365,7 +365,8 @@ MAX_TOKENS = 160
 _SE_RINDE = "NO_SE_PUEDE"
 
 
-async def redactar(pregunta: str, fuente: str, modelo=None) -> str | None:
+async def redactar(pregunta: str, fuente: str, modelo=None,
+                   negocio: str | None = None) -> str | None:
     """Contesta la pregunta con el texto del negocio, o `None`.
 
     `None` significa "usá el texto literal de siempre", y es lo que devuelve
@@ -405,6 +406,35 @@ async def redactar(pregunta: str, fuente: str, modelo=None) -> str | None:
         # qué intenta colar el modelo, y de que un rechazo nuevo pueda entrar a
         # `casos_invencion.jsonl` en vez de perderse.
         logger.warning("redacción rechazada [%s] · %r", motivo, texto)
+        # Y se anota, porque la lista de verbos del guardián NO está completa ni
+        # puede estarlo: cada rechazo es la evidencia de qué le falta. Sin
+        # juntarlo, la función se degrada en silencio y nadie se entera.
+        if negocio:
+            _anotar_rechazo(negocio, motivo)
         return None
 
     return texto
+
+
+def _anotar_rechazo(negocio: str, motivo: str) -> None:
+    """Deja constancia de qué frenó el guardián. Nunca levanta ni espera.
+
+    El import va adentro y no arriba: `metricas` abre una conexión a Postgres, y
+    este módulo tiene que poder importarse y probarse sin base —`test_redaccion`
+    corre sin red y sin credenciales, y esa propiedad vale más que la prolijidad
+    de un import al tope del archivo.
+    """
+    try:
+        import asyncio
+
+        from src import metricas
+
+        # La regla, no el texto: lo que sirve para mantener la lista es «se
+        # frenó por vocabulario» y qué palabra, no el párrafo entero.
+        regla, _, palabra = motivo.partition(":")
+        asyncio.create_task(metricas.anotar(
+            "guardian", negocio, None,
+            palabra.strip().strip("«»").split()[0] if palabra.strip() else None,
+            regla.strip()))
+    except Exception:  # noqa: BLE001 — anotar nunca puede romper una respuesta
+        pass

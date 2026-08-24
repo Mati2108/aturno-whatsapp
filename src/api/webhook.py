@@ -30,7 +30,7 @@ import httpx
 from datetime import datetime, timedelta, timezone
 
 from fastapi import BackgroundTasks, FastAPI, Form, Header, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from twilio.request_validator import RequestValidator
 from twilio.rest import Client
@@ -835,6 +835,126 @@ async def metricas_() -> dict:
                                        if reservadas_hoy else None),
         },
     }
+
+
+@app.get("/senales")
+async def senales_() -> dict:
+    """Lo que el bot no supo hacer, agrupado y ordenado por frecuencia.
+
+    El JSON crudo, para quien lo quiera procesar. La versión que se mira con los
+    ojos es `/tablero`.
+    """
+    return await metricas.senales()
+
+
+def _lista(titulo: str, ayuda: str, filas: list[dict], vacio: str) -> str:
+    """Un bloque del tablero. Sin filas, dice qué significa eso."""
+    if not filas:
+        return (f'<section><h2>{titulo}</h2><p class="ayuda">{ayuda}</p>'
+                f'<p class="vacio">{vacio}</p></section>')
+    renglones = "".join(
+        f'<li><b>{f["veces"]}</b><span>{_escapar(f["texto"] or "—")}</span>'
+        f'<i>{_escapar(f.get("detalle") or f.get("paso") or "")}</i></li>'
+        for f in filas)
+    return (f'<section><h2>{titulo}</h2><p class="ayuda">{ayuda}</p>'
+            f'<ol class="senales">{renglones}</ol></section>')
+
+
+def _escapar(t: str) -> str:
+    return (str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+@app.get("/tablero", response_class=HTMLResponse)
+async def tablero() -> str:
+    """Una página para abrir en el celular. Sin instalar nada.
+
+    Los números existen desde que se escribió `metricas.py`, pero un endpoint
+    que devuelve JSON no lo mira nadie — y un dato que nadie mira es lo mismo
+    que un dato que no existe. Por eso esto es HTML y no una API más.
+
+    Dos mitades, y la división importa:
+
+      · LO QUE ARREGLA EL BOT — para quien lo mantiene. Cada línea es una tarea
+        concreta: una frase que se repite es una fila que falta en una tabla.
+      · LO QUE ARREGLA EL NEGOCIO — eso es producto. «14 personas quisieron
+        sábado y no tenías lugar» es plata que se perdió, contada, y ningún
+        competidor se la está dando al dueño.
+
+    Público como `/gasto` y `/salud`, y por el mismo motivo: acá no hay ningún
+    teléfono ni ningún dato de ninguna persona. Son conteos y frases sueltas, y
+    del paso del nombre no se guarda ni el texto.
+    """
+    m = await metricas.resumen()
+    sen = await metricas.senales()
+    g = GASTO.resumen()
+
+    def pct(x):
+        return f"{x:.0%}" if isinstance(x, (int, float)) else "—"
+
+    caidas = "".join(
+        f'<li><b>{n}</b><span>{_escapar(paso.replace("esperando_", ""))}</span></li>'
+        for paso, n in (m["abandono_por_paso"] or {}).items()) or \
+        '<li class="vacio">Todavía nadie abandonó a mitad.</li>'
+
+    return f"""<!doctype html><html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tablero · aturno</title><style>
+:root{{--fondo:#0f1115;--caja:#171a21;--texto:#e8eaed;--tenue:#9aa0a6;--linea:#262b34;--acento:#7cc4a4}}
+*{{box-sizing:border-box}}
+body{{margin:0;padding:20px 16px 48px;background:var(--fondo);color:var(--texto);
+ font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}}
+h1{{font-size:20px;margin:0 0 4px}}
+.sub{{color:var(--tenue);font-size:13px;margin:0 0 24px}}
+.tarjetas{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:28px}}
+.t{{background:var(--caja);border:1px solid var(--linea);border-radius:12px;padding:14px}}
+.t b{{display:block;font-size:26px;line-height:1.1;font-variant-numeric:tabular-nums}}
+.t span{{color:var(--tenue);font-size:12px}}
+h2{{font-size:15px;margin:28px 0 2px}}
+.ayuda{{color:var(--tenue);font-size:12px;margin:0 0 10px}}
+ol.senales,ul{{list-style:none;margin:0;padding:0;background:var(--caja);
+ border:1px solid var(--linea);border-radius:12px;overflow:hidden}}
+li{{display:flex;gap:12px;align-items:baseline;padding:10px 14px;border-top:1px solid var(--linea)}}
+li:first-child{{border-top:0}}
+li b{{min-width:2.2em;color:var(--acento);font-variant-numeric:tabular-nums}}
+li span{{flex:1;word-break:break-word}}
+li i{{color:var(--tenue);font-size:11px;font-style:normal;white-space:nowrap}}
+.vacio{{color:var(--tenue);font-size:13px;padding:12px 14px}}
+.corte{{margin:36px 0 0;border:0;border-top:1px solid var(--linea)}}
+.rotulo{{color:var(--acento);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin:26px 0 0}}
+</style></head><body>
+<h1>Tablero</h1>
+<p class="sub">{m["cerradas"]} conversaciones terminadas · {m["en_curso"]} en curso</p>
+
+<div class="tarjetas">
+  <div class="t"><b>{pct(m["containment"])}</b><span>resueltas sin humano</span></div>
+  <div class="t"><b>{pct(m["escalacion"])}</b><span>pasaron a una persona</span></div>
+  <div class="t"><b>{m["reservadas"]}</b><span>turnos sacados</span></div>
+  <div class="t"><b>{m["turnos_hasta_reservar"] or "—"}</b><span>mensajes por turno</span></div>
+  <div class="t"><b>US$ {g.get("usd", 0):.3f}</b><span>gastado hoy</span></div>
+</div>
+
+<p class="rotulo">Para el negocio</p>
+{_lista("Turnos que se perdieron",
+        "Pidieron esto y no había lugar. Cada uno es plata que no entró.",
+        sen["demanda_perdida"], "Nadie pidió algo que no estuviera disponible.")}
+{_lista("Preguntas sin responder",
+        "Te preguntaron esto y no está cargado. Cargalo desde el panel.",
+        sen["sin_respuesta"], "No quedó ninguna pregunta sin responder.")}
+
+<hr class="corte">
+<p class="rotulo">Para arreglar el bot</p>
+<section><h2>Dónde se cae la gente</h2>
+<p class="ayuda">En qué paso abandonaron. Dice QUÉ arreglar, no que algo anda mal.</p>
+<ul>{caidas}</ul></section>
+{_lista("Lo que no entendió",
+        "Cada frase repetida es una fila que falta en la tabla de atajos: "
+        "arreglarla no cuesta ni un peso ni una llamada al modelo.",
+        sen["no_entendio"], "Entendió todo lo que le escribieron.")}
+{_lista("Lo que frenó el guardián",
+        "Redacciones que no salieron al aire. Si son muchas de la misma regla, "
+        "a la lista de palabras le falta algo.",
+        sen["guardian"], "No frenó ninguna redacción.")}
+</body></html>"""
 
 
 @app.get("/salud", response_model=Salud)

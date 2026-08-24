@@ -71,6 +71,7 @@ from src.fechas import hoy as hoy_del_negocio
 from src.api.conversaciones import avisar_sin_respuesta
 from src.rag.indice import Recuperador, abrir_indice
 from src.redaccion import redactar
+from src import metricas
 from src.schemas import (
     Alternativa,
     DatosDelCliente,
@@ -625,6 +626,11 @@ async def avanzar(conv: Conversacion, config) -> dict:
         # a que el panel conteste.
         if not texto:
             asyncio.create_task(avisar_sin_respuesta(negocio, consulta))
+            # Y se anota, para poder CONTARLAS. Al panel llegan una por una y
+            # sueltas se ignoran en una semana; «te preguntaron 12 veces por
+            # estacionamiento» se atiende. El agrupado es toda la diferencia.
+            asyncio.create_task(metricas.anotar(
+                "sin_respuesta", negocio, estado.value, consulta))
 
         # `consulta` y `fragmentos` viajan para que `responder` pueda decidir si
         # deja que el modelo reescriba esto. La pregunta hace falta para que la
@@ -1447,6 +1453,13 @@ async def responder(conv: Conversacion, config) -> dict:
         #
         # No cuesta una llamada más al modelo: las entidades ya vinieron en la
         # misma clasificación que devolvió DESCONOCIDO.
+        # Se anota QUÉ no entendió. Es la señal más barata de arreglar que
+        # existe: una frase que se repite es una fila que falta en la tabla de
+        # atajos, y eso no cuesta ni un peso ni una llamada al modelo. Hasta
+        # ahora se perdía en un log que nadie lee.
+        asyncio.create_task(metricas.anotar(
+            "no_entendio", negocio, estado.value, conv.get("mensaje")))
+
         paso = await _pedir_paso(conv, cfg, negocio, nombre_negocio,
                                  await _aturno.listar_servicios(negocio))
         return {"respuesta": P.no_entendi(
@@ -1541,7 +1554,8 @@ async def responder(conv: Conversacion, config) -> dict:
         # O sea: el peor caso de esta rama es exactamente el bot de antes.
         redactado = None
         if datos.get("fragmentos") == 1:
-            redactado = await redactar(datos.get("consulta") or conv["mensaje"], texto)
+            redactado = await redactar(datos.get("consulta") or conv["mensaje"], texto,
+                                       negocio=negocio)
 
         cuerpo = redactado or P.respuesta_info(texto)
 
@@ -1585,6 +1599,14 @@ async def responder(conv: Conversacion, config) -> dict:
             datos["codigo"]), "opciones": []}
 
     if especial == "no_disponible":
+        # DEMANDA PERDIDA: pidió algo que el negocio no tenía. Es el dato más
+        # vendible de todos —«14 personas quisieron sábado a la mañana y no
+        # tenías lugar» es plata que el negocio dejó de ganar, contada— y hasta
+        # ahora se usaba para contestar y se tiraba.
+        asyncio.create_task(metricas.anotar(
+            "demanda_perdida", negocio, estado.value,
+            conv.get("fecha") or conv.get("mensaje"), datos.get("motivo")))
+
         alts = [Alternativa(fecha=date.fromisoformat(a["fecha"]),
                             hora=datetime.strptime(a["hora"], "%H:%M").time(),
                             distancia_minutos=0) for a in datos.get("alternativas", [])]

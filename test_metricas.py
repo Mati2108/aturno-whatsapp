@@ -176,6 +176,79 @@ async def t5_no_guarda_telefonos():
              not any("5491130032002" in str(f) for f in crudo))
 
 
+async def t6_las_senales_se_acumulan():
+    """Lo que el bot ya sabe y hasta ahora tiraba.
+
+    Cada vez que no entiende, que el guardián frena una redacción, que alguien
+    pide un horario que no está, o que preguntan algo sin cargar — el bot lo
+    detecta, lo usa para contestar, y lo tira. Acá se guarda.
+
+    Lo que importa de este test no es que escriba: es que AGRUPE. Una lista de
+    incidentes sueltos no se mira; «esta frase falló 7 veces» se arregla. La
+    diferencia entre las dos es todo el valor de la función.
+    """
+    print(f"\n{NEGRITA}[6] LAS SEÑALES SE ACUMULAN Y SE AGRUPAN{FIN}")
+    print(f"{GRIS}  El bot ya detecta todo esto. Hasta ahora lo tiraba.{FIN}")
+
+    # La misma frase, cuatro veces, en el mismo paso. Y otra, una sola vez.
+    for _ in range(4):
+        await M.anotar("no_entendio", NEG, "esperando_servicio", "tenes turno pa hoy?")
+    await M.anotar("no_entendio", NEG, "esperando_dia", "el finde que viene")
+
+    await M.anotar("guardian", NEG, None, "sirven", "vocabulario")
+    await M.anotar("guardian", NEG, None, "sirven", "vocabulario")
+
+    await M.anotar("demanda_perdida", NEG, "esperando_dia", "sábado", "cerrado")
+    for _ in range(3):
+        await M.anotar("demanda_perdida", NEG, "esperando_horario", "sábado", "ocupado")
+
+    await M.anotar("sin_respuesta", NEG, None, "tienen estacionamiento?")
+
+    r = await M.senales(NEG)
+
+    no_entendio = r["no_entendio"]
+    igual("la frase repetida se cuenta junta", no_entendio[0]["veces"], 4)
+    igual("y es la primera de la lista", no_entendio[0]["texto"], "tenes turno pa hoy?")
+    igual("la frase suelta también está", len(no_entendio), 2)
+    chequear("con el paso donde falló",
+             no_entendio[0]["paso"] == "esperando_servicio", str(no_entendio[0]))
+
+    igual("lo que frena el guardián se cuenta", r["guardian"][0]["veces"], 2)
+    igual("y dice qué regla fue", r["guardian"][0]["detalle"], "vocabulario")
+
+    perdida = r["demanda_perdida"]
+    igual("la demanda perdida se agrupa por lo pedido", len(perdida), 2)
+    igual("y la más frecuente va primera", perdida[0]["veces"], 3)
+
+    igual("las preguntas sin responder también", len(r["sin_respuesta"]), 1)
+
+    # ---- Lo que NO se guarda ----
+    #
+    # El paso del nombre es donde la gente escribe su nombre completo. Un nombre
+    # que el bot no entendió no se arregla mirando una tabla, así que guardarlo
+    # es quedarse con un dato personal a cambio de nada.
+    await M.anotar("no_entendio", NEG, "esperando_nombre", "María José Fernández")
+    r2 = await M.senales(NEG)
+    chequear("del paso del NOMBRE no se guarda el texto",
+             not any("María" in (x["texto"] or "") for x in r2["no_entendio"]),
+             str(r2["no_entendio"])[:70])
+
+    # ---- Y si la base se cae, no pasa nada ----
+    original, M._URL = M._URL, "postgresql://nadie@127.0.0.1:1/no-existe"
+    M.olvidar_pool()
+    try:
+        await M.anotar("no_entendio", NEG, "esperando_dia", "algo")
+        chequear("anotar con la base caída no levanta", True)
+        vacio = await M.senales(NEG)
+        chequear("y leer devuelve listas vacías, no un error",
+                 vacio["no_entendio"] == [], str(vacio)[:50])
+    except Exception as e:  # noqa: BLE001
+        chequear(f"NO tenía que levantar: {type(e).__name__}", False, str(e)[:70])
+    finally:
+        M._URL = original
+        M.olvidar_pool()
+
+
 async def main() -> int:
     print(f"\n{NEGRITA}EL INSTRUMENTO DE MEDICIÓN, CALIBRADO{FIN}")
     print(f"{GRIS}  negocio de prueba: {NEG}{FIN}")
@@ -196,6 +269,7 @@ async def main() -> int:
         await t3_los_turnos(r)
         await t4_no_tumba_el_bot()
         await t5_no_guarda_telefonos()
+        await t6_las_senales_se_acumulan()
     finally:
         await M.borrar_negocio(NEG)
         await M.cerrar()
