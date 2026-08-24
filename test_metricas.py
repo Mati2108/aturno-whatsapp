@@ -249,6 +249,83 @@ async def t6_las_senales_se_acumulan():
         M.olvidar_pool()
 
 
+async def t7_el_embudo():
+    """Dónde EXACTAMENTE se traba la gente.
+
+    Contar tropiezos sueltos no alcanza: «24 veces no entendió eligiendo el
+    servicio» puede ser un desastre o ser normal. Lo que se puede leer es el
+    embudo — cuántos LLEGARON a cada paso y cuántos lo PASARON — porque ahí
+    «se cae 1 de cada 5» sale solo.
+
+    Y hay dos fallas distintas que sólo el embudo separa:
+
+      · Un paso donde se CAEN muchos: está mal planteado.
+      · Un paso que CUESTA muchos mensajes aunque casi nadie se caiga: se
+        entiende mal, pero la gente insiste. Ese no se ve de ninguna otra forma
+        y es el que se arregla más barato.
+
+    El patrón de abajo tiene los dos a propósito.
+    """
+    print(f"\n{NEGRITA}[7] EL EMBUDO: LLEGARON, PASARON, SE CAYERON{FIN}")
+    print(f"{GRIS}  «24 tropiezos» no se puede leer. «1 de cada 5» sí.{FIN}")
+
+    NEGE = NEG + "-embudo"
+
+    # 10 conversaciones. Forma EXACTA, calculada a mano:
+    #   · las 10 llegan a elegir el servicio y lo pasan en 1 mensaje
+    #   · las 10 llegan a elegir el día; 3 se caen ahí  → 30% de caída
+    #   · las 7 que siguen tardan 3 mensajes en el horario → cuesta, no se cae
+    for i in range(10):
+        conv = f"{NEGE}:c{i}"
+        await M.evento(conv, NEGE, "esperando_servicio", "esperando_dia", avanzo=True)
+        if i < 3:
+            # Se van eligiendo el día: entran y no salen.
+            await M.evento(conv, NEGE, "esperando_dia", "esperando_dia", avanzo=False)
+        else:
+            await M.evento(conv, NEGE, "esperando_dia", "esperando_horario", avanzo=True)
+            for _ in range(2):   # dos intentos que no avanzan
+                await M.evento(conv, NEGE, "esperando_horario", "esperando_horario",
+                               avanzo=False)
+            await M.evento(conv, NEGE, "esperando_horario", "esperando_nombre",
+                           avanzo=True)
+
+    e = {f["paso"]: f for f in await M.embudo(NEGE)}
+
+    igual("al servicio llegaron 10", e["esperando_servicio"]["llegaron"], 10)
+    igual("y lo pasaron los 10", e["esperando_servicio"]["pasaron"], 10)
+
+    igual("al día llegaron 10", e["esperando_dia"]["llegaron"], 10)
+    igual("lo pasaron 7", e["esperando_dia"]["pasaron"], 7)
+    igual("o sea que se cayó el 30%", e["esperando_dia"]["caida"], 0.3)
+
+    igual("al horario llegaron 7", e["esperando_horario"]["llegaron"], 7)
+    igual("y lo pasaron los 7", e["esperando_horario"]["pasaron"], 7)
+    igual("no se cayó nadie", e["esperando_horario"]["caida"], 0.0)
+    # Pero costó: 3 mensajes por conversación contra 1 en los otros pasos.
+    igual("aunque costó 3 mensajes cada uno",
+          e["esperando_horario"]["mensajes_por_conversacion"], 3.0)
+    igual("y el servicio costó 1", e["esperando_servicio"]["mensajes_por_conversacion"], 1.0)
+
+    chequear("los pasos vienen en el orden del flujo, no por frecuencia",
+             [f["paso"] for f in await M.embudo(NEGE)][:3] ==
+             ["esperando_servicio", "esperando_dia", "esperando_horario"],
+             str([f["paso"] for f in await M.embudo(NEGE)]))
+
+    # ---- Y no puede tumbar nada ----
+    original, M._URL = M._URL, "postgresql://nadie@127.0.0.1:1/no-existe"
+    M.olvidar_pool()
+    try:
+        await M.evento("x", NEGE, "esperando_dia", "esperando_dia", avanzo=False)
+        chequear("registrar un evento con la base caída no levanta", True)
+        chequear("y el embudo devuelve vacío, no un error", await M.embudo(NEGE) == [])
+    except Exception as ex:  # noqa: BLE001
+        chequear(f"NO tenía que levantar: {type(ex).__name__}", False, str(ex)[:70])
+    finally:
+        M._URL = original
+        M.olvidar_pool()
+        await M.borrar_negocio(NEGE)
+
+
 async def main() -> int:
     print(f"\n{NEGRITA}EL INSTRUMENTO DE MEDICIÓN, CALIBRADO{FIN}")
     print(f"{GRIS}  negocio de prueba: {NEG}{FIN}")
@@ -270,6 +347,7 @@ async def main() -> int:
         await t4_no_tumba_el_bot()
         await t5_no_guarda_telefonos()
         await t6_las_senales_se_acumulan()
+        await t7_el_embudo()
     finally:
         await M.borrar_negocio(NEG)
         await M.cerrar()

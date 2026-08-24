@@ -1040,6 +1040,10 @@ h2{font-family:Poppins,sans-serif;font-size:15px;font-weight:600;overflow-wrap:a
   max-width:55%;text-align:right}
 .dijo{display:block;color:var(--tenue);font-size:12.5px;margin-top:3px;
   overflow-wrap:anywhere}
+.ctx b{font-weight:600}
+.mal{color:var(--naranja)}
+.ojo{color:var(--violeta)}
+.bien{color:#3f9e6b}
 
 details{border-top:1px solid var(--borde)}
 details summary{cursor:pointer;padding:10px 15px;color:var(--tenue);font-size:12.5px;
@@ -1197,27 +1201,41 @@ async def tablero(negocio: str | None = None) -> str:
     def pct(x):
         return f"{x:.0%}" if isinstance(x, (int, float)) else "—"
 
-    cuellos = await metricas.cuellos_de_botella(negocio)
-    if cuellos:
-        top_c = max(c["tropiezos"] for c in cuellos)
-        cuellos_html = '<ol class="senales tarjeta">' + "".join(
-            f'<li><div class="fila1">'
-            # El PORCENTAJE es lo que se lee, no el conteo. «24 tropiezos» puede
-            # ser un desastre o ser normal según si fueron 24 de 30 o de 900; el
-            # 13% se entiende solo. El conteo queda al costado, más chico, para
-            # quien quiera la escala.
-            + (f'<span class="veces alerta">{c["falla"]:.0%}</span>'
-               if c["falla"] is not None
-               else f'<span class="veces alerta">{c["tropiezos"]}</span>')
-            + f'<span class="que">{_esc(_PASO_LEGIBLE.get(c["paso"], c["paso"]))}</span>'
-            + (f'<span class="pct">{c["tropiezos"]} de {c["mensajes"]}</span>'
-               if c["mensajes"] else '')
-            + f'</div><div class="fila2 alerta">'
-            f'<span class="barra"><i style="width:{c["tropiezos"] / top_c * 100:.0f}%"></i></span>'
-            f'<span class="ctx">{c["frases"]} frase(s) distinta(s)</span></div></li>'
-            for c in cuellos) + '</ol>'
+    # ---- El embudo ----
+    #
+    # Se muestra en el ORDEN DEL FLUJO, no por frecuencia. Un embudo desordenado
+    # deja de ser un embudo: lo que se lee es la caída de un escalón al
+    # siguiente, y eso sólo se ve si los escalones están en orden.
+    pasos = await metricas.embudo(negocio)
+    if pasos:
+        base = max(p["llegaron"] for p in pasos) or 1
+
+        def _fila_paso(p):
+            # Dos fallas distintas, y se marcan distinto porque se arreglan
+            # distinto: la CAÍDA dice que el paso está mal planteado; los
+            # MENSAJES POR CONVERSACIÓN dicen que se entiende mal pero la gente
+            # insiste — no se ve de ninguna otra forma y suele salir más barato.
+            notas = []
+            if p["caida"]:
+                notas.append(f'<b class="mal">{p["caida"]:.0%} se fue acá</b>')
+            if (p["mensajes_por_conversacion"] or 0) > 1.3:
+                notas.append(f'<b class="ojo">{p["mensajes_por_conversacion"]} '
+                             f'mensajes cada uno</b>')
+            if not notas:
+                notas.append('<b class="bien">limpio</b>')
+            return (f'<li><div class="fila1">'
+                    f'<span class="que">{_esc(_PASO_LEGIBLE.get(p["paso"], p["paso"]))}</span>'
+                    f'<span class="pct">{p["llegaron"]} → {p["pasaron"]}</span></div>'
+                    f'<div class="fila2">'
+                    f'<span class="barra"><i style="width:'
+                    f'{p["llegaron"] / base * 100:.0f}%"></i></span>'
+                    f'<span class="ctx">{" · ".join(notas)}</span></div></li>')
+
+        embudo_html = ('<ol class="senales tarjeta">'
+                       + "".join(_fila_paso(p) for p in pasos) + '</ol>')
     else:
-        cuellos_html = '<div class="tarjeta vacia">Ningún paso está costando trabajo.</div>'
+        embudo_html = ('<div class="tarjeta vacia">Todavía no hay conversaciones '
+                       'para dibujar el recorrido.</div>')
 
     caidas = m["abandono_por_paso"] or {}
     frases = m.get("abandono_frases") or {}
@@ -1271,12 +1289,13 @@ async def tablero(negocio: str | None = None) -> str:
          "Supo contestar todo lo que le preguntaron más de una vez.")}
 
 <p class="rotulo bot">Dónde se traba la gente</p>
-<section class="bloque"><h2>Los pasos que más cuestan</h2>
-<p class="ayuda">Cuántas veces el bot no entendió, por paso. Si un paso junta muchos
-tropiezos repartidos en frases distintas, el problema no son las frases: es el paso.</p>
-{cuellos_html}
-<p class="accion">→ Un paso con muchas frases distintas se arregla cambiando cómo
-pregunta. Con pocas frases repetidas, enseñándole esas frases.</p></section>
+<section class="bloque"><h2>El recorrido, paso por paso</h2>
+<p class="ayuda">Cuántos llegaron a cada paso y cuántos lo pasaron. La barra es
+cuánta gente llegó: donde se angosta, ahí se está perdiendo.</p>
+{embudo_html}
+<p class="accion">→ <b class="mal">Se fue acá</b> significa que el paso está mal
+planteado. <b class="ojo">Muchos mensajes</b> significa que se entiende mal pero
+la gente insiste — eso suele arreglarse enseñándole dos frases.</p></section>
 
 <section class="bloque"><h2>Dónde dejan la conversación</h2>
 <p class="ayuda">En qué paso se fueron sin reservar, y lo último que escribieron
@@ -1489,6 +1508,22 @@ async def _verificar_firma(request: Request, firma: str) -> None:
         raise HTTPException(status_code=403, detail="Firma de Twilio inválida")
 
 
+async def _paso_de(hilo: str) -> str | None:
+    """En qué paso está una conversación, ahora. `None` si es nueva o falla.
+
+    Lee del checkpointer, que es el único que lo sabe. Nunca levanta: esto
+    existe para medir, y una medición que rompe una conversación es peor que no
+    medir nada.
+    """
+    if _grafo is None:
+        return None
+    try:
+        st = await _grafo.aget_state({"configurable": {"thread_id": hilo}})
+        return (st.values or {}).get("estado")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ---------- El trabajo de fondo ----------
 def _falta_para_que_se_vea(tardo: float, piso: float) -> float:
     """Cuánto falta esperar para que el «escribiendo…» alcance a verse.
@@ -1690,6 +1725,13 @@ async def _procesar_bajo_candado(
     codigo_senia = None
     datos_senia: dict = {}
     empezo = time.monotonic()
+
+    # El paso ANTES de tocar nada. Es la mitad del embudo, y es la mitad que se
+    # pierde para siempre si no se lee ahora: dentro de dos líneas la
+    # conversación ya avanzó y no hay forma de saber de dónde venía.
+    hilo_actual = hilo_de(negocio.business_id, mensaje.de)
+    paso_antes = await _paso_de(hilo_actual)
+
     await _mostrar_escribiendo(message_sid)
     salidas = _salidas_de_emergencia(negocio)
 
@@ -1773,6 +1815,24 @@ async def _procesar_bajo_candado(
     if not (texto or "").strip():
         logger.info("sin respuesta para %s (conversación escalada)", mensaje.de)
         return
+
+    # El evento del mensaje: de qué paso venía, a cuál fue, y si avanzó.
+    #
+    # Va acá y no antes porque recién ahora se sabe en qué paso quedó. Con estos
+    # dos datos el embudo sale de una consulta —cuántos llegaron a cada paso y
+    # cuántos lo pasaron— y sin ellos no sale de ninguna.
+    #
+    # En tarea de fondo: escribir una métrica no puede demorar una respuesta ni
+    # tumbarla. `evento` se traga sus propios errores.
+    asyncio.create_task(metricas.evento(
+        hilo_de(negocio.business_id, mensaje.de), negocio.business_id,
+        paso_antes=paso_antes or "apertura",
+        paso_despues=estado_ahora or paso_antes or "apertura",
+        avanzo=bool(estado_ahora and estado_ahora != paso_antes),
+        demoro_ms=int((time.monotonic() - empezo) * 1000),
+        # El texto SÓLO cuando no avanzó: lo que el bot entendió bien no hay
+        # que arreglarlo, y son mensajes de personas.
+        texto=None if (estado_ahora and estado_ahora != paso_antes) else mensaje.texto))
 
     # Que el "escribiendo…" alcance a verse. Ver `_falta_para_que_se_vea`: sin
     # esto, los mensajes que se resuelven sin modelo contestan tan rápido que el

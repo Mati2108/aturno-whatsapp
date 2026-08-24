@@ -149,6 +149,40 @@ create index if not exists senales_negocio on senales (business_id, tipo);
 -- Una fila por (negocio, paso) y no una por mensaje: lo único que se pregunta
 -- es «cuántos», así que guardar cada mensaje sería pagar millones de filas por
 -- un número que cabe en una.
+-- UN EVENTO POR MENSAJE. La base de todo lo demás.
+--
+-- Hasta acá cada métrica nueva pedía una tabla o una columna: `conversaciones`
+-- para el containment, `senales` para lo que hay que arreglar, `pasos` para el
+-- denominador. Tres tablas de propósito único, y la cuarta pregunta que se nos
+-- ocurriera iba a pedir la cuarta tabla.
+--
+-- Con un evento por mensaje —de qué paso venía, a cuál fue, si avanzó— el
+-- embudo, los tiempos, la matriz de confusión y lo que se nos ocurra dentro de
+-- tres meses se CALCULAN. Es la práctica estándar en observabilidad de agentes
+-- y es exactamente lo contrario de lo que veníamos haciendo.
+--
+-- Volumen: un negocio con 30 conversaciones diarias son ~180 filas por día.
+-- Cien negocios, 18.000. Postgres ni se entera, y lo viejo se puede podar.
+--
+-- `texto` va SÓLO cuando no se entendió, y nunca del paso del nombre: guardar
+-- lo que el bot sí entendió no arregla nada y son mensajes de personas.
+create table if not exists eventos (
+    id           bigserial primary key,
+    conversacion text        not null,
+    business_id  text        not null,
+    paso_antes   text        not null,
+    paso_despues text        not null,
+    avanzo       boolean     not null,
+    intent       text,
+    resuelto_por text,
+    plantilla    text,
+    demoro_ms    integer,
+    texto        text,
+    cuando       timestamptz not null
+);
+create index if not exists eventos_negocio on eventos (business_id, cuando);
+create index if not exists eventos_conv on eventos (conversacion);
+
 create table if not exists pasos (
     business_id text not null,
     paso        text not null,
@@ -210,6 +244,100 @@ async def registrar(hilo: str, business_id: str, estado: str,
                   t if desenlace else None, ultimo))
     except Exception as e:  # noqa: BLE001
         logger.warning("no se pudo registrar la métrica (%s): %s", type(e).__name__, e)
+
+
+async def evento(conversacion: str, business_id: str, paso_antes: str,
+                 paso_despues: str, avanzo: bool, intent: str | None = None,
+                 resuelto_por: str | None = None, plantilla: str | None = None,
+                 demoro_ms: int | None = None, texto: str | None = None,
+                 cuando: datetime | None = None) -> None:
+    """Anota un mensaje. Nunca levanta.
+
+    Los dos campos que importan son `paso_antes` y `paso_despues`: con ellos el
+    embudo sale de una consulta, y sin ellos no sale de ninguna. Todo lo demás
+    es contexto que se agradece después.
+    """
+    if paso_antes == _PASO_PRIVADO or paso_despues == _PASO_PRIVADO:
+        texto = None
+    try:
+        pool = await _conexiones()
+        async with pool.connection() as c:
+            await c.execute("""
+                insert into eventos (conversacion, business_id, paso_antes,
+                    paso_despues, avanzo, intent, resuelto_por, plantilla,
+                    demoro_ms, texto, cuando)
+                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (_hilo_hash(conversacion), business_id, paso_antes, paso_despues,
+                  avanzo, intent, resuelto_por, plantilla, demoro_ms,
+                  (texto or "").strip()[:200] or None, cuando or ahora()))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("no se pudo anotar el evento (%s): %s", type(e).__name__, e)
+
+
+# El orden del flujo. El embudo se muestra en este orden y no por frecuencia:
+# un embudo desordenado deja de ser un embudo — lo que se lee es la caída de un
+# escalón al siguiente, y eso sólo se ve si los escalones están en orden.
+_ORDEN_PASOS = ("apertura", "esperando_servicio", "esperando_staff",
+                "esperando_dia", "esperando_horario", "esperando_nombre",
+                "esperando_confirmacion", "esperando_senia", "confirmado")
+
+
+async def embudo(business_id: str | None = None) -> list[dict]:
+    """Cuántos LLEGARON a cada paso y cuántos lo PASARON.
+
+    Es la diferencia entre un dato y un número suelto. «24 tropiezos eligiendo
+    el servicio» no se puede leer; «se cae 1 de cada 5» sí.
+
+    Y separa dos fallas que de otro modo se confunden:
+
+      · CAÍDA alta — el paso está mal planteado, la gente se va.
+      · MENSAJES POR CONVERSACIÓN alto con caída baja — se entiende mal pero la
+        gente insiste. No se ve de ninguna otra forma, y suele ser lo más barato
+        de arreglar.
+
+    «Llegaron» se cuenta por conversaciones distintas, no por mensajes: alguien
+    que intenta cuatro veces el mismo paso llegó una sola vez.
+    """
+    try:
+        pool = await _conexiones()
+        async with pool.connection() as c:
+            filas = await (await c.execute("""
+                select paso_antes as paso,
+                       count(distinct conversacion) as llegaron,
+                       count(distinct conversacion) filter (where avanzo) as pasaron,
+                       count(*) as mensajes
+                from eventos
+                where (%s::text is null or business_id = %s::text)
+                group by paso_antes
+            """, (business_id, business_id))).fetchall()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("no se pudo leer el embudo (%s): %s", type(e).__name__, e)
+        return []
+
+    por_paso = {f["paso"]: f for f in filas}
+    salida = []
+    for paso in _ORDEN_PASOS:
+        f = por_paso.pop(paso, None)
+        if f:
+            salida.append(_fila_embudo(f))
+    # Un paso que no está en `_ORDEN_PASOS` igual se muestra, al final. Es la
+    # red para cuando alguien agregue un estado y se olvide de la lista: mejor
+    # verlo fuera de orden que no verlo.
+    salida += [_fila_embudo(f) for f in por_paso.values()]
+    return salida
+
+
+def _fila_embudo(f: dict) -> dict:
+    llegaron, pasaron = f["llegaron"], f["pasaron"]
+    return {
+        "paso": f["paso"],
+        "llegaron": llegaron,
+        "pasaron": pasaron,
+        "caida": round((llegaron - pasaron) / llegaron, 4) if llegaron else None,
+        "mensajes": f["mensajes"],
+        "mensajes_por_conversacion": (round(f["mensajes"] / llegaron, 2)
+                                      if llegaron else None),
+    }
 
 
 async def contar_paso(business_id: str, paso: str) -> None:
@@ -467,6 +595,10 @@ async def borrar_negocio(business_id: str) -> None:
             await c.execute("delete from conversaciones where business_id = %s",
                             (business_id,))
             await c.execute("delete from senales where business_id = %s",
+                            (business_id,))
+            await c.execute("delete from eventos where business_id = %s",
+                            (business_id,))
+            await c.execute("delete from pasos where business_id = %s",
                             (business_id,))
     except Exception:  # noqa: BLE001
         pass
