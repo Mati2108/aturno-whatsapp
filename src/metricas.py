@@ -112,8 +112,13 @@ create table if not exists conversaciones (
     turnos        integer     not null default 0,
     estado_final  text,
     desenlace     text,
-    cerrada_en    timestamptz
+    cerrada_en    timestamptz,
+    -- Lo último que escribió antes de irse. Sin esto, «2 abandonaron eligiendo
+    -- el horario» dice DÓNDE pero no POR QUÉ, y el por qué es lo único que se
+    -- puede arreglar. Del paso del nombre no se guarda: ver `_PASO_PRIVADO`.
+    ultimo_mensaje text
 );
+alter table conversaciones add column if not exists ultimo_mensaje text;
 create index if not exists conversaciones_negocio on conversaciones (business_id);
 
 -- Lo que el bot YA detecta y hasta ahora tiraba.
@@ -156,7 +161,8 @@ async def preparar() -> None:
 
 async def registrar(hilo: str, business_id: str, estado: str,
                     desenlace: str | None = None,
-                    cuando: datetime | None = None) -> None:
+                    cuando: datetime | None = None,
+                    mensaje: str | None = None) -> None:
     """Anota un mensaje de esta conversación. Nunca levanta.
 
     Se llama con CADA mensaje, no sólo al cerrar: así el contador de mensajes y
@@ -168,22 +174,26 @@ async def registrar(hilo: str, business_id: str, estado: str,
     sigue escribiendo ya ganó, y el mensaje siguiente empieza otra historia.
     """
     t = cuando or ahora()
+    if estado == _PASO_PRIVADO:
+        mensaje = None
+    ultimo = (mensaje or "").strip()[:200] or None
     try:
         pool = await _conexiones()
         async with pool.connection() as c:
             await c.execute("""
                 insert into conversaciones
                        (hilo, business_id, abierta_en, ultimo_en, turnos,
-                        estado_final, desenlace, cerrada_en)
-                values (%s, %s, %s, %s, 1, %s, %s, %s)
+                        estado_final, desenlace, cerrada_en, ultimo_mensaje)
+                values (%s, %s, %s, %s, 1, %s, %s, %s, %s)
                 on conflict (hilo) do update set
-                    ultimo_en    = excluded.ultimo_en,
-                    turnos       = conversaciones.turnos + 1,
-                    estado_final = excluded.estado_final,
-                    desenlace    = coalesce(conversaciones.desenlace, excluded.desenlace),
-                    cerrada_en   = coalesce(conversaciones.cerrada_en, excluded.cerrada_en)
+                    ultimo_en     = excluded.ultimo_en,
+                    turnos        = conversaciones.turnos + 1,
+                    estado_final  = excluded.estado_final,
+                    desenlace     = coalesce(conversaciones.desenlace, excluded.desenlace),
+                    cerrada_en    = coalesce(conversaciones.cerrada_en, excluded.cerrada_en),
+                    ultimo_mensaje = excluded.ultimo_mensaje
             """, (_hilo_hash(hilo), business_id, t, t, estado, desenlace,
-                  t if desenlace else None))
+                  t if desenlace else None, ultimo))
     except Exception as e:  # noqa: BLE001
         logger.warning("no se pudo registrar la métrica (%s): %s", type(e).__name__, e)
 
@@ -257,7 +267,8 @@ async def senales(business_id: str | None = None, tope: int = 25) -> dict:
 
 VACIO = {"cerradas": 0, "en_curso": 0, "reservadas": 0, "escaladas": 0,
          "abandonadas": 0, "containment": None, "escalacion": None,
-         "abandono": None, "abandono_por_paso": {}, "turnos_hasta_reservar": None}
+         "abandono": None, "abandono_por_paso": {}, "abandono_frases": {},
+         "turnos_hasta_reservar": None}
 
 
 async def resumen(business_id: str | None = None, solo_hoy: bool = False) -> dict:
@@ -274,7 +285,7 @@ async def resumen(business_id: str | None = None, solo_hoy: bool = False) -> dic
         pool = await _conexiones()
         async with pool.connection() as c:
             filas = await (await c.execute("""
-                select desenlace, estado_final, turnos, ultimo_en
+                select desenlace, estado_final, turnos, ultimo_en, ultimo_mensaje
                 from conversaciones
                 -- El cast es obligatorio: sin él Postgres no puede deducir el
                 -- tipo de un parámetro que sólo aparece en un «is null».
@@ -295,10 +306,17 @@ async def resumen(business_id: str | None = None, solo_hoy: bool = False) -> dic
     cerradas = len(reservadas) + len(escaladas) + len(abandonadas)
     porcion = (lambda n: round(n / cerradas, 4)) if cerradas else (lambda n: None)
 
+    # Dónde se cayeron, y QUÉ ESCRIBIERON antes de irse. El paso solo dice el
+    # lugar; lo que escribieron dice el motivo, y el motivo es lo único que se
+    # puede arreglar.
     por_paso: dict[str, int] = {}
+    frases: dict[str, list[str]] = {}
     for f in abandonadas:
         paso = f["estado_final"] or "desconocido"
         por_paso[paso] = por_paso.get(paso, 0) + 1
+        ultimo = f.get("ultimo_mensaje")
+        if ultimo and ultimo not in frases.setdefault(paso, []):
+            frases[paso].append(ultimo)
 
     return {
         "cerradas": cerradas,
@@ -310,6 +328,7 @@ async def resumen(business_id: str | None = None, solo_hoy: bool = False) -> dic
         "escalacion": porcion(len(escaladas)),
         "abandono": porcion(len(abandonadas)),
         "abandono_por_paso": dict(sorted(por_paso.items(), key=lambda kv: -kv[1])),
+        "abandono_frases": {p: v[:4] for p, v in frases.items()},
         "turnos_hasta_reservar": (int(median(f["turnos"] for f in reservadas))
                                   if reservadas else None),
     }

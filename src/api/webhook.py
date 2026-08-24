@@ -931,17 +931,23 @@ async def tablero(negocio: str | None = None) -> str:
         f'<b>{n["conversaciones"] + n["senales"]}</b></a>'
         for n in lista) or '<span class="pest vacia">todavía sin datos</span>'
 
-    caidas = (await metricas.resumen(negocio))["abandono_por_paso"] or {}
+    caidas = m["abandono_por_paso"] or {}
+    frases = m.get("abandono_frases") or {}
     if caidas:
         top = max(caidas.values())
         filas_caidas = "".join(
             f'<li><span class="veces alerta">{n}</span>'
             f'<span class="barra"><i style="width:{n / top * 100:.0f}%"></i></span>'
-            f'<span class="que">{_esc(_PASO_LEGIBLE.get(p, p))}</span></li>'
+            f'<span class="que">{_esc(_PASO_LEGIBLE.get(p, p))}'
+            # Lo último que escribieron antes de irse. El paso dice DÓNDE; esto
+            # dice por qué, y el por qué es lo único que se puede arreglar.
+            + ("".join(f'<em class="dijo">«{_esc(x)}»</em>' for x in frases.get(p, []))
+               if frases.get(p) else "")
+            + f'</span></li>'
             for p, n in caidas.items())
         caidas_html = f'<ol class="senales tarjeta">{filas_caidas}</ol>'
     else:
-        caidas_html = '<div class="tarjeta vacia">Todavía nadie abandonó a mitad.</div>'
+        caidas_html = '<div class="tarjeta vacia">Todavía nadie dejó una conversación a mitad.</div>'
 
     return f"""<!doctype html><html lang="es"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1011,6 +1017,7 @@ h2{{font-family:Poppins,sans-serif;font-size:15.5px;font-weight:600}}
 .que{{word-break:break-word;font-size:14px}}
 .meta{{color:var(--tenue);font-size:11px;text-align:right;white-space:nowrap}}
 .meta em{{display:block;font-style:normal;opacity:.7}}
+.dijo{{display:block;font-style:normal;color:var(--tenue);font-size:12.5px;margin-top:2px}}
 @media(max-width:520px){{
   .senales li{{grid-template-columns:auto 1fr;row-gap:3px}}
   .barra{{display:none}} .meta{{grid-column:2;text-align:left}}
@@ -1031,25 +1038,34 @@ h2{{font-family:Poppins,sans-serif;font-size:15.5px;font-weight:600}}
 </div>
 
 <p class="rotulo negocio">Para el negocio</p>
-{_bloque("Turnos que se perdieron",
-         "Pidieron esto y no había lugar. Cada uno es plata que no entró.",
-         sen["demanda_perdida"], "Nadie pidió algo que no estuviera disponible.")}
-{_bloque("Preguntas sin responder",
-         "Te preguntaron esto y no está cargado. Se carga desde el panel y el bot lo contesta solo.",
-         sen["sin_respuesta"], "No quedó ninguna pregunta sin responder.")}
+{_bloque("Te pidieron estos turnos y no tenías lugar",
+         "Cada uno es una persona que quiso reservar y se fue con las manos vacías. "
+         "Si un día se repite, ahí te falta agenda.",
+         sen["demanda_perdida"],
+         "Todo lo que te pidieron estaba disponible.")}
+{_bloque("Te preguntaron esto y el bot no sabía",
+         "No está cargado en tus respuestas. Lo cargás una vez desde el panel y "
+         "de ahí en más lo contesta solo.",
+         sen["sin_respuesta"],
+         "Supo contestar todo lo que le preguntaron.")}
 
 <p class="rotulo bot">Para arreglar el bot</p>
-<section class="bloque"><h2>Dónde se cae la gente</h2>
-<p class="ayuda">En qué paso abandonaron. Dice QUÉ arreglar, no que algo anda mal.</p>
+<section class="bloque"><h2>Dónde dejan la conversación</h2>
+<p class="ayuda">En qué paso se fueron sin reservar, y lo último que escribieron antes
+de irse. El paso dice dónde; la frase dice por qué.</p>
 {caidas_html}</section>
-{_bloque("Lo que no entendió",
-         "Cada frase repetida es una fila que falta en la tabla de atajos: arreglarla no "
-         "cuesta ni un peso ni una llamada al modelo.",
-         sen["no_entendio"], "Entendió todo lo que le escribieron.", tono="alerta")}
-{_bloque("Lo que frenó el guardián",
-         "Redacciones que no salieron al aire por si inventaban algo. Si se repite la misma "
-         "regla, a la lista de palabras le falta una.",
-         sen["guardian"], "No frenó ninguna redacción.", tono="alerta")}
+{_bloque("Frases que el bot no entendió",
+         "Escribieron esto y el bot no supo qué querían. Si una se repite, conviene "
+         "enseñársela: son dos líneas de código y después la entiende gratis, sin "
+         "consultarle a la IA.",
+         sen["no_entendio"],
+         "Entendió todo lo que le escribieron.", tono="alerta")}
+{_bloque("Respuestas que no dejamos salir",
+         "El bot armó una respuesta que decía algo que vos no cargaste, y se frenó "
+         "antes de mandarla: salió el texto tal cual lo escribiste. Acá está la palabra "
+         "que la frenó — si es un sinónimo inofensivo que se repite, hay que permitirlo.",
+         sen["guardian"],
+         "No hubo que frenar ninguna respuesta.", tono="alerta")}
 
 </div></body></html>"""
 
@@ -1679,7 +1695,7 @@ async def _componer_respuesta(mensaje: MensajeEntrante, negocio: Tenant) -> str:
     estado = salida.get("estado") or ""
     await metricas.registrar(
         hilo, negocio.business_id, estado,
-        desenlace=_DESENLACE.get(estado))
+        desenlace=_DESENLACE.get(estado), mensaje=mensaje.texto)
 
     return salida["respuesta"]
 
